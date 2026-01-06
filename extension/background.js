@@ -8,8 +8,6 @@ const TIMELINE_PATTERNS = [
   /\/graphql\/[^/]+\/Home(Timeline|LatestTimeline)/,
   /\/graphql\/[^/]+\/UserTweets/,
   /\/graphql\/[^/]+\/TweetDetail/,
-  /\/graphql\/[^/]+\/Following/,
-  /\/graphql\/[^/]+\/ForYou/,
 ];
 
 function isTimelineEndpoint(url) {

@@ -1,22 +1,21 @@
-/* Aerie: Visual treatment for unapproved tweets */
-/* MINIMAL VERSION - for performance testing */
+/* Aerie: Blur unapproved tweets */
+/* NOTE: Avoiding display:none and opacity:0 to not interfere with Twitter's visibility tracking */
 
-/* Unapproved tweets: just a red left border and muted colors */
-/* NOTE: Keeping pointer-events enabled to not interfere with Twitter's scroll logic */
+/* Pending/unknown tweets: blur to obscure content */
 article[data-testid="tweet"] {
-  border-left: 4px solid #ff4444 !important;
-  color: #888 !important;
+  filter: blur(5px) !important;
+  transition: filter 0.2s ease-out;
 }
 
-/* Approved tweets are shown normally */
+/* Approved tweets: clear and normal */
 article[data-testid="tweet"].aerie-approved,
 article[data-testid="tweet"][data-aerie-status="approved"] {
-  border-left: none !important;
-  color: inherit !important;
+  filter: none !important;
 }
 
-/* Filtered tweets: just collapse them */
+/* Filtered tweets: heavy blur but still "visible" to browser */
 article[data-testid="tweet"].aerie-filtered,
 article[data-testid="tweet"][data-aerie-status="filtered"] {
-  display: none !important;
+  filter: blur(10px) saturate(0) !important;
+  opacity: 0.4 !important;
 }
