@@ -2,13 +2,29 @@
 // Hides unapproved tweets and reveals them as they get classified
 
 const BACKEND_URL = "http://localhost:8080";
-const POLL_INTERVAL_MS = 2000; // Check for newly approved tweets every 2 seconds
+const POLL_INTERVAL_MS = 3000; // Check for newly approved tweets every 3 seconds
 
 // Track tweets we're monitoring (id -> element)
 const pendingTweets = new Map();
 
 // Cache of known statuses to avoid repeated backend calls
 const statusCache = new Map(); // id -> 'approved' | 'pending' | 'filtered'
+
+// Pre-load cache with all classified tweets on init
+async function preloadCache() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/tweets/classified-ids`);
+    if (response.ok) {
+      const classified = await response.json();
+      for (const [id, status] of Object.entries(classified)) {
+        statusCache.set(id, status);
+      }
+      console.log(`[Aerie] Pre-loaded ${statusCache.size} classified tweets into cache`);
+    }
+  } catch (err) {
+    console.warn('[Aerie] Could not pre-load cache:', err.message);
+  }
+}
 
 // Extract tweet ID from a tweet element
 function getTweetId(tweetElement) {
@@ -238,6 +254,9 @@ function setupMutationObserver() {
 // Initialize
 async function init() {
   console.log('[Aerie] Content script loaded');
+
+  // Pre-load cache with classified tweets (reduces network requests)
+  await preloadCache();
 
   // Process any tweets already in the DOM
   const existingTweets = findTweetElements();

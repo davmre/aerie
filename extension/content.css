@@ -2,25 +2,31 @@
 
 /* Blur all tweets by default - maintains layout but obscures content */
 article[data-testid="tweet"] {
-  filter: blur(8px) !important;
+  /* Use lower blur + opacity combo - much faster than heavy blur */
+  filter: blur(5px) !important;
+  opacity: 0.6 !important;
   user-select: none !important;
   pointer-events: none !important;
-  transition: filter 0.3s ease-out;
+  /* GPU acceleration hints */
+  will-change: filter, opacity;
+  contain: layout style;
 }
 
 /* Approved tweets are shown normally - use data attribute for more robust selection */
 article[data-testid="tweet"].aerie-approved,
 article[data-testid="tweet"][data-aerie-status="approved"] {
   filter: none !important;
+  opacity: 1 !important;
   user-select: auto !important;
   pointer-events: auto !important;
+  will-change: auto;
 }
 
 /* Filtered tweets stay blurred and fade out */
 article[data-testid="tweet"].aerie-filtered,
 article[data-testid="tweet"][data-aerie-status="filtered"] {
-  filter: blur(12px) !important;
-  opacity: 0.3 !important;
-  max-height: 80px !important;
+  filter: blur(8px) !important;
+  opacity: 0.2 !important;
+  max-height: 60px !important;
   overflow: hidden !important;
 }

@@ -10,7 +10,7 @@ from flask import Flask, request, jsonify
 from database import (
     init_database, store_tweets, get_stats, get_pending_tweets,
     get_approved_tweets, check_tweet_statuses, update_classification,
-    approve_all_pending
+    approve_all_pending, get_all_classified_ids
 )
 
 app = Flask(__name__)
@@ -114,6 +114,13 @@ def approve_all():
 
     count = approve_all_pending()
     return jsonify({"approved": count})
+
+
+@app.route("/tweets/classified-ids", methods=["GET"])
+def classified_ids():
+    """Get all classified tweet IDs for cache pre-population."""
+    ids = get_all_classified_ids()
+    return jsonify(ids)
 
 
 @app.route("/health", methods=["GET"])

@@ -200,6 +200,21 @@ def approve_all_pending(db_path: Path = DEFAULT_DB_PATH) -> int:
         return cursor.rowcount
 
 
+def get_all_classified_ids(db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
+    """Get all classified tweet IDs with their status. For cache pre-population."""
+    with transaction(db_path) as conn:
+        rows = conn.execute("""
+            SELECT id, classification_result
+            FROM tweets
+            WHERE classification_status = 'completed'
+        """).fetchall()
+
+        return {
+            row['id']: 'approved' if row['classification_result'] == 1 else 'filtered'
+            for row in rows
+        }
+
+
 def check_tweet_statuses(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
     """
     Check the classification status of multiple tweets.
