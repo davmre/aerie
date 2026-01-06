@@ -1,10 +1,11 @@
-"""SQLite database operations for tweet storage."""
+"""SQLite database operations for tweet storage and classification."""
 
 import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "tweets.db"
 
@@ -90,6 +91,54 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 source_url TEXT,
                 tweet_count INTEGER DEFAULT 0
             );
+
+            -- Versioned prompt definitions
+            CREATE TABLE IF NOT EXISTS prompts (
+                id TEXT PRIMARY KEY,
+                prompt_text TEXT NOT NULL,
+                response_schema TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            -- Raw LLM responses (cached)
+            CREATE TABLE IF NOT EXISTS prompt_responses (
+                tweet_id TEXT NOT NULL,
+                prompt_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                response_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (tweet_id, prompt_id, model),
+                FOREIGN KEY (tweet_id) REFERENCES tweets(id),
+                FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+            );
+
+            -- Mode definitions (prompt + extractor)
+            CREATE TABLE IF NOT EXISTS modes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                prompt_id TEXT NOT NULL,
+                prefilter TEXT,
+                extractor TEXT NOT NULL,
+                description TEXT,
+                FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+            );
+
+            -- Human labels for evaluation
+            CREATE TABLE IF NOT EXISTS human_labels (
+                tweet_id TEXT NOT NULL,
+                mode_id TEXT NOT NULL,
+                should_show INTEGER NOT NULL,
+                notes TEXT,
+                labeled_at TEXT NOT NULL,
+                PRIMARY KEY (tweet_id, mode_id),
+                FOREIGN KEY (tweet_id) REFERENCES tweets(id),
+                FOREIGN KEY (mode_id) REFERENCES modes(id)
+            );
+
+            -- Indexes for new tables
+            CREATE INDEX IF NOT EXISTS idx_prompt_responses_tweet ON prompt_responses(tweet_id);
+            CREATE INDEX IF NOT EXISTS idx_prompt_responses_prompt ON prompt_responses(prompt_id);
+            CREATE INDEX IF NOT EXISTS idx_human_labels_mode ON human_labels(mode_id);
         """)
 
 
@@ -293,6 +342,337 @@ def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
             "approved": approved,
             "filtered": filtered,
         }
+
+
+# =============================================================================
+# Prompt and Mode Management
+# =============================================================================
+
+
+def create_prompt(
+    prompt_id: str,
+    prompt_text: str,
+    response_schema: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    """Create or update a prompt definition."""
+    with transaction(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO prompts (id, prompt_text, response_schema, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (prompt_id, prompt_text, response_schema, datetime.utcnow().isoformat()),
+        )
+
+
+def get_prompt(prompt_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
+    """Get a prompt by ID."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM prompts WHERE id = ?", (prompt_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_prompts(db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
+    """List all prompts."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM prompts ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def create_mode(
+    mode_id: str,
+    name: str,
+    prompt_id: str,
+    extractor: str,
+    prefilter: str | None = None,
+    description: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    """Create or update a mode definition."""
+    with transaction(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO modes (id, name, prompt_id, prefilter, extractor, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (mode_id, name, prompt_id, prefilter, extractor, description),
+        )
+
+
+def get_mode(mode_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
+    """Get a mode by ID."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM modes WHERE id = ?", (mode_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def list_modes(db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
+    """List all modes."""
+    with transaction(db_path) as conn:
+        rows = conn.execute("SELECT * FROM modes ORDER BY name").fetchall()
+        return [dict(row) for row in rows]
+
+
+# =============================================================================
+# Prompt Responses (LLM output cache)
+# =============================================================================
+
+
+def store_prompt_response(
+    tweet_id: str,
+    prompt_id: str,
+    model: str,
+    response: dict | Any,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    """Store an LLM response for a tweet/prompt pair."""
+    response_json = json.dumps(response) if not isinstance(response, str) else response
+    with transaction(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO prompt_responses
+            (tweet_id, prompt_id, model, response_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (tweet_id, prompt_id, model, response_json, datetime.utcnow().isoformat()),
+        )
+
+
+def get_prompt_response(
+    tweet_id: str,
+    prompt_id: str,
+    model: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict | None:
+    """
+    Get a cached LLM response.
+    If model is None, returns the most recent response for any model.
+    """
+    with transaction(db_path) as conn:
+        if model:
+            row = conn.execute(
+                """
+                SELECT * FROM prompt_responses
+                WHERE tweet_id = ? AND prompt_id = ? AND model = ?
+                """,
+                (tweet_id, prompt_id, model),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT * FROM prompt_responses
+                WHERE tweet_id = ? AND prompt_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (tweet_id, prompt_id),
+            ).fetchone()
+
+        if row:
+            result = dict(row)
+            result["response"] = json.loads(result["response_json"])
+            return result
+        return None
+
+
+def get_prompt_responses_batch(
+    tweet_ids: list[str],
+    prompt_id: str,
+    model: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, dict]:
+    """
+    Get cached LLM responses for multiple tweets.
+    Returns dict mapping tweet_id -> response dict.
+    """
+    if not tweet_ids:
+        return {}
+
+    with transaction(db_path) as conn:
+        placeholders = ",".join("?" * len(tweet_ids))
+        if model:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM prompt_responses
+                WHERE tweet_id IN ({placeholders}) AND prompt_id = ? AND model = ?
+                """,
+                (*tweet_ids, prompt_id, model),
+            ).fetchall()
+        else:
+            # Get most recent response per tweet
+            rows = conn.execute(
+                f"""
+                SELECT pr.* FROM prompt_responses pr
+                INNER JOIN (
+                    SELECT tweet_id, MAX(created_at) as max_created
+                    FROM prompt_responses
+                    WHERE tweet_id IN ({placeholders}) AND prompt_id = ?
+                    GROUP BY tweet_id
+                ) latest ON pr.tweet_id = latest.tweet_id
+                    AND pr.created_at = latest.max_created
+                    AND pr.prompt_id = ?
+                """,
+                (*tweet_ids, prompt_id, prompt_id),
+            ).fetchall()
+
+        result = {}
+        for row in rows:
+            r = dict(row)
+            r["response"] = json.loads(r["response_json"])
+            result[r["tweet_id"]] = r
+        return result
+
+
+def get_tweets_without_response(
+    prompt_id: str,
+    model: str | None = None,
+    limit: int = 100,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Get tweets that don't have a response for the given prompt."""
+    with transaction(db_path) as conn:
+        if model:
+            rows = conn.execute(
+                """
+                SELECT t.* FROM tweets t
+                LEFT JOIN prompt_responses pr
+                    ON t.id = pr.tweet_id
+                    AND pr.prompt_id = ?
+                    AND pr.model = ?
+                WHERE pr.tweet_id IS NULL
+                ORDER BY t.captured_at DESC
+                LIMIT ?
+                """,
+                (prompt_id, model, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT t.* FROM tweets t
+                LEFT JOIN prompt_responses pr
+                    ON t.id = pr.tweet_id
+                    AND pr.prompt_id = ?
+                WHERE pr.tweet_id IS NULL
+                ORDER BY t.captured_at DESC
+                LIMIT ?
+                """,
+                (prompt_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+# =============================================================================
+# Human Labels
+# =============================================================================
+
+
+def add_human_label(
+    tweet_id: str,
+    mode_id: str,
+    should_show: bool,
+    notes: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    """Add a human label for evaluation."""
+    with transaction(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO human_labels
+            (tweet_id, mode_id, should_show, notes, labeled_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (tweet_id, mode_id, 1 if should_show else 0, notes, datetime.utcnow().isoformat()),
+        )
+
+
+def get_human_labels(
+    mode_id: str | None = None,
+    limit: int = 1000,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Get human labels, optionally filtered by mode."""
+    with transaction(db_path) as conn:
+        if mode_id:
+            rows = conn.execute(
+                """
+                SELECT hl.*, t.text, t.author_username
+                FROM human_labels hl
+                JOIN tweets t ON hl.tweet_id = t.id
+                WHERE hl.mode_id = ?
+                ORDER BY hl.labeled_at DESC
+                LIMIT ?
+                """,
+                (mode_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT hl.*, t.text, t.author_username
+                FROM human_labels hl
+                JOIN tweets t ON hl.tweet_id = t.id
+                ORDER BY hl.labeled_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_unlabeled_tweets(
+    mode_id: str,
+    limit: int = 100,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Get tweets that don't have a human label for the given mode."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT t.* FROM tweets t
+            LEFT JOIN human_labels hl
+                ON t.id = hl.tweet_id AND hl.mode_id = ?
+            WHERE hl.tweet_id IS NULL
+            ORDER BY t.captured_at DESC
+            LIMIT ?
+            """,
+            (mode_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+# =============================================================================
+# Mode-based Tweet Queries
+# =============================================================================
+
+
+def get_tweet(tweet_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
+    """Get a single tweet by ID."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM tweets WHERE id = ?", (tweet_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def get_tweets_batch(
+    tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, dict]:
+    """Get multiple tweets by ID."""
+    if not tweet_ids:
+        return {}
+    with transaction(db_path) as conn:
+        placeholders = ",".join("?" * len(tweet_ids))
+        rows = conn.execute(
+            f"SELECT * FROM tweets WHERE id IN ({placeholders})",
+            tweet_ids,
+        ).fetchall()
+        return {row["id"]: dict(row) for row in rows}
 
 
 if __name__ == "__main__":

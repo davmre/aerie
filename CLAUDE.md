@@ -101,22 +101,59 @@ The hash in the URL (e.g., `/graphql/abc123xyz/HomeTimeline`) changes periodical
 
 ## Database Schema
 
-Key fields in the `tweets` table:
+### Core Tables
+
+**tweets** - Raw tweet data captured from Twitter
 - `id` - Tweet ID (primary key)
 - `text`, `author_username`, `created_at` - Basic tweet data
-- `classification_status` - 'pending' | 'completed'
-- `classification_result` - 1 (approved) | 0 (filtered)
-- `classification_reason` - LLM's explanation (for debugging)
+- `classification_status` - 'pending' | 'completed' (legacy, for backwards compat)
+- `classification_result` - 1 (approved) | 0 (filtered) (legacy)
+
+**prompts** - Versioned prompt definitions
+- `id` - Prompt ID (e.g., "binary_filter_v1", "topic_tagger_v1")
+- `prompt_text` - The system prompt sent to the LLM
+- `response_schema` - Expected JSON response format
+
+**prompt_responses** - Cached LLM responses
+- `tweet_id`, `prompt_id`, `model` - Composite primary key
+- `response_json` - Raw JSON response from LLM
+
+**modes** - Viewing mode definitions
+- `id` - Mode ID (e.g., "default", "ml_focus", "dharma")
+- `prompt_id` - Which prompt to use
+- `prefilter` - Optional prefilter function (short-circuits LLM)
+- `extractor` - Function to extract decision from response
+
+**human_labels** - Ground truth for evaluation
+- `tweet_id`, `mode_id` - Composite primary key
+- `should_show` - 1 = show, 0 = hide
+- `notes` - Optional annotation
+
+### Multi-Mode Architecture
+
+The system supports multiple viewing modes:
+
+1. **Prompts** return arbitrary JSON (topics, scores, binary decisions, etc.)
+2. **Modes** combine a prompt with an extractor function
+3. **Prefilters** can short-circuit LLM calls (e.g., author whitelist)
+4. **Extractors** interpret prompt responses into show/hide decisions
+
+```
+Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → Decision
+           │                                                          │
+           └────────────────────────────────────────────────────────────┘
+```
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/tweets` | POST | Receive tweets from extension |
-| `/tweets/check` | POST | Check approval status of tweet IDs |
-| `/tweets/classified-ids` | GET | Get all classified IDs (for cache) |
+| `/tweets/check` | POST | Check approval status of tweet IDs (supports `mode` param) |
+| `/tweets/classified-ids` | GET | Get all classified IDs (supports `mode` param) |
 | `/tweets/approve-all` | POST | Approve all pending (for testing) |
 | `/tweets/pending` | GET | Get pending tweets (for classifier) |
+| `/modes` | GET | List available filtering modes |
 | `/stats` | GET | Database statistics |
 
 ## Running the Project
@@ -129,33 +166,65 @@ Key fields in the `tweets` table:
 
 ## Classifier Usage
 
-The classifier uses Claude to evaluate each pending tweet against a filter prompt.
+The classifier uses Claude to evaluate tweets against prompts stored in the database.
 
 ```bash
 # Set your API key
 export ANTHROPIC_API_KEY="your-key-here"
 
-# Classify all pending tweets
+# Classify with default prompt (binary_filter_v1)
 python classifier.py
 
+# Classify with a specific prompt
+python classifier.py classify topic_tagger_v1
+
 # Classify with verbose output
-python classifier.py --verbose
+python classifier.py classify --verbose
 
 # Dry run (no changes saved)
-python classifier.py --dry-run --verbose
-
-# Use custom filter prompt
-python classifier.py --prompt-file filter_prompt.txt
+python classifier.py classify --dry-run --verbose
 
 # Limit to 20 tweets, use faster/cheaper model
-python classifier.py --max 20 --model claude-3-haiku-20240307
+python classifier.py classify --max 20 --model claude-3-haiku-20240307
+
+# List available prompts
+python classifier.py prompts
+
+# List available modes
+python classifier.py modes
+
+# Create a custom mode
+python classifier.py create-mode ml_focus \
+    --prompt topic_tagger_v1 \
+    --extractor topic_ml \
+    --name "ML Focus" \
+    --description "Show only ML/AI content"
 ```
 
-The default filter prompt approves informative/positive/creative content and filters ragebait, doomposting, engagement farming, etc. Customize by editing `filter_prompt.txt` or creating your own.
+### Built-in Prompts
+
+- **binary_filter_v1**: Simple yes/no filter for quality content
+- **topic_tagger_v1**: Extracts topics and quality scores (toxicity, informativeness, etc.)
+
+### Creating Custom Modes
+
+Modes combine a prompt with extractor and optional prefilter functions:
+
+```python
+# extractors.py - add custom extractors
+def my_custom_extractor(response: dict) -> bool:
+    return "ml" in response.get("topics", []) and response.get("scores", {}).get("toxicity", 1) < 0.2
+
+# prefilters.py - add custom prefilters
+def my_whitelist(tweet: dict) -> bool | None:
+    if tweet.get("author_username") in {"favorite_author"}:
+        return True
+    return None  # Let LLM decide
+```
 
 ## TODO
 
 - [ ] Background/scheduled classification (cron or daemon)
-- [ ] Better visual treatment options (configurable)
-- [ ] Handle rate limiting gracefully
+- [ ] Extension support for mode switching
+- [ ] Evaluation metrics for human labels vs model predictions
 - [ ] Batch API calls for efficiency (messages batches API)
