@@ -186,6 +186,53 @@ def update_classification(tweet_id: str, approved: bool, reason: str = None,
         """, (1 if approved else 0, reason, datetime.utcnow().isoformat(), tweet_id))
 
 
+def approve_all_pending(db_path: Path = DEFAULT_DB_PATH) -> int:
+    """Approve all pending tweets. Returns count of approved tweets."""
+    with transaction(db_path) as conn:
+        cursor = conn.execute("""
+            UPDATE tweets SET
+                classification_status = 'completed',
+                classification_result = 1,
+                classification_reason = 'auto-approved',
+                classified_at = ?
+            WHERE classification_status = 'pending'
+        """, (datetime.utcnow().isoformat(),))
+        return cursor.rowcount
+
+
+def check_tweet_statuses(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
+    """
+    Check the classification status of multiple tweets.
+    Returns a dict mapping tweet_id -> status ('approved', 'filtered', 'pending', or 'unknown').
+    """
+    if not tweet_ids:
+        return {}
+
+    with transaction(db_path) as conn:
+        # Use IN clause with placeholders
+        placeholders = ','.join('?' * len(tweet_ids))
+        rows = conn.execute(f"""
+            SELECT id, classification_status, classification_result
+            FROM tweets
+            WHERE id IN ({placeholders})
+        """, tweet_ids).fetchall()
+
+        result = {}
+        for row in rows:
+            tweet_id = row['id']
+            if row['classification_status'] == 'completed':
+                result[tweet_id] = 'approved' if row['classification_result'] == 1 else 'filtered'
+            else:
+                result[tweet_id] = 'pending'
+
+        # Mark any IDs not in database as 'unknown'
+        for tweet_id in tweet_ids:
+            if tweet_id not in result:
+                result[tweet_id] = 'unknown'
+
+        return result
+
+
 def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
     """Get database statistics."""
     with transaction(db_path) as conn:

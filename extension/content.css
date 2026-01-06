@@ -1,0 +1,27 @@
+/* Aerie: Hide tweets by default until approved */
+
+/* Hide all tweets initially */
+article[data-testid="tweet"] {
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  transition: opacity 0.2s ease-in, max-height 0.2s ease-in;
+}
+
+/* Reveal approved tweets */
+article[data-testid="tweet"].aerie-approved {
+  opacity: 1;
+  max-height: none;
+  overflow: visible;
+  padding: revert;
+  margin: revert;
+  border: revert;
+}
+
+/* Filtered tweets stay hidden (but we mark them so we don't recheck) */
+article[data-testid="tweet"].aerie-filtered {
+  display: none !important;
+}

@@ -7,7 +7,11 @@ and stores them in SQLite for later classification.
 """
 
 from flask import Flask, request, jsonify
-from database import init_database, store_tweets, get_stats, get_pending_tweets, get_approved_tweets
+from database import (
+    init_database, store_tweets, get_stats, get_pending_tweets,
+    get_approved_tweets, check_tweet_statuses, update_classification,
+    approve_all_pending
+)
 
 app = Flask(__name__)
 
@@ -78,6 +82,38 @@ def approved_tweets():
     offset = request.args.get("offset", 0, type=int)
     tweets = get_approved_tweets(limit, offset)
     return jsonify({"tweets": tweets, "count": len(tweets)})
+
+
+@app.route("/tweets/check", methods=["POST", "OPTIONS"])
+def check_tweets():
+    """
+    Check the approval status of multiple tweets.
+    Expects JSON body: {"ids": ["123", "456", ...]}
+    Returns: {"123": "approved", "456": "pending", ...}
+    """
+    if request.method == "OPTIONS":
+        return "", 204
+
+    data = request.get_json()
+    if not data or "ids" not in data:
+        return jsonify({"error": "Missing 'ids' field"}), 400
+
+    ids = data["ids"]
+    if not isinstance(ids, list):
+        return jsonify({"error": "'ids' must be an array"}), 400
+
+    statuses = check_tweet_statuses(ids)
+    return jsonify(statuses)
+
+
+@app.route("/tweets/approve-all", methods=["POST", "OPTIONS"])
+def approve_all():
+    """Approve all pending tweets. For testing/debugging."""
+    if request.method == "OPTIONS":
+        return "", 204
+
+    count = approve_all_pending()
+    return jsonify({"approved": count})
 
 
 @app.route("/health", methods=["GET"])
