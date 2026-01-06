@@ -1,32 +1,22 @@
-/* Aerie: Blur unapproved tweets until classified */
+/* Aerie: Visual treatment for unapproved tweets */
+/* MINIMAL VERSION - for performance testing */
 
-/* Blur all tweets by default - maintains layout but obscures content */
+/* Unapproved tweets: just a red left border and muted colors */
+/* NOTE: Keeping pointer-events enabled to not interfere with Twitter's scroll logic */
 article[data-testid="tweet"] {
-  /* Use lower blur + opacity combo - much faster than heavy blur */
-  filter: blur(5px) !important;
-  opacity: 0.6 !important;
-  user-select: none !important;
-  pointer-events: none !important;
-  /* GPU acceleration hints */
-  will-change: filter, opacity;
-  contain: layout style;
+  border-left: 4px solid #ff4444 !important;
+  color: #888 !important;
 }
 
-/* Approved tweets are shown normally - use data attribute for more robust selection */
+/* Approved tweets are shown normally */
 article[data-testid="tweet"].aerie-approved,
 article[data-testid="tweet"][data-aerie-status="approved"] {
-  filter: none !important;
-  opacity: 1 !important;
-  user-select: auto !important;
-  pointer-events: auto !important;
-  will-change: auto;
+  border-left: none !important;
+  color: inherit !important;
 }
 
-/* Filtered tweets stay blurred and fade out */
+/* Filtered tweets: just collapse them */
 article[data-testid="tweet"].aerie-filtered,
 article[data-testid="tweet"][data-aerie-status="filtered"] {
-  filter: blur(8px) !important;
-  opacity: 0.2 !important;
-  max-height: 60px !important;
-  overflow: hidden !important;
+  display: none !important;
 }

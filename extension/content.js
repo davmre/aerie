@@ -218,28 +218,36 @@ function findTweetElements() {
 
 // Watch for new tweets being added to the DOM
 function setupMutationObserver() {
-  const observer = new MutationObserver((mutations) => {
-    const newTweets = [];
+  let pendingNewTweets = [];
+  let processScheduled = false;
 
+  const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
       for (const node of mutation.addedNodes) {
         if (node.nodeType !== Node.ELEMENT_NODE) continue;
 
         // Check if this node is a tweet
         if (node.matches?.('article[data-testid="tweet"]')) {
-          newTweets.push(node);
+          pendingNewTweets.push(node);
         }
 
         // Check for tweets inside this node
         const tweets = node.querySelectorAll?.('article[data-testid="tweet"]');
         if (tweets) {
-          newTweets.push(...tweets);
+          pendingNewTweets.push(...tweets);
         }
       }
     }
 
-    if (newTweets.length > 0) {
-      processTweets(newTweets);
+    // Defer processing to avoid interfering with Twitter's DOM operations
+    if (pendingNewTweets.length > 0 && !processScheduled) {
+      processScheduled = true;
+      requestAnimationFrame(() => {
+        const tweets = pendingNewTweets;
+        pendingNewTweets = [];
+        processScheduled = false;
+        processTweets(tweets);
+      });
     }
   });
 
