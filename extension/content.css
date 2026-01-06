@@ -1,27 +1,26 @@
-/* Aerie: Hide tweets by default until approved */
+/* Aerie: Blur unapproved tweets until classified */
 
-/* Hide all tweets initially */
+/* Blur all tweets by default - maintains layout but obscures content */
 article[data-testid="tweet"] {
-  opacity: 0;
-  max-height: 0;
-  overflow: hidden;
-  padding: 0 !important;
-  margin: 0 !important;
-  border: none !important;
-  transition: opacity 0.2s ease-in, max-height 0.2s ease-in;
+  filter: blur(8px) !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  transition: filter 0.3s ease-out;
 }
 
-/* Reveal approved tweets */
-article[data-testid="tweet"].aerie-approved {
-  opacity: 1;
-  max-height: none;
-  overflow: visible;
-  padding: revert;
-  margin: revert;
-  border: revert;
+/* Approved tweets are shown normally - use data attribute for more robust selection */
+article[data-testid="tweet"].aerie-approved,
+article[data-testid="tweet"][data-aerie-status="approved"] {
+  filter: none !important;
+  user-select: auto !important;
+  pointer-events: auto !important;
 }
 
-/* Filtered tweets stay hidden (but we mark them so we don't recheck) */
-article[data-testid="tweet"].aerie-filtered {
-  display: none !important;
+/* Filtered tweets stay blurred and fade out */
+article[data-testid="tweet"].aerie-filtered,
+article[data-testid="tweet"][data-aerie-status="filtered"] {
+  filter: blur(12px) !important;
+  opacity: 0.3 !important;
+  max-height: 80px !important;
+  overflow: hidden !important;
 }

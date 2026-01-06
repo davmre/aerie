@@ -2,7 +2,7 @@
 // Hides unapproved tweets and reveals them as they get classified
 
 const BACKEND_URL = "http://localhost:8080";
-const POLL_INTERVAL_MS = 5000; // Check for newly approved tweets every 5 seconds
+const POLL_INTERVAL_MS = 2000; // Check for newly approved tweets every 2 seconds
 
 // Track tweets we're monitoring (id -> element)
 const pendingTweets = new Map();
@@ -47,20 +47,46 @@ async function checkTweetStatuses(tweetIds) {
   }
 }
 
+// Apply status to a tweet element (using both class and data attribute for robustness)
+function applyStatus(tweetElement, status) {
+  // Set data attribute (survives some DOM manipulations better than classes)
+  tweetElement.setAttribute('data-aerie-status', status);
+
+  // Also set class for CSS
+  tweetElement.classList.remove('aerie-approved', 'aerie-filtered', 'aerie-pending');
+  if (status === 'approved') {
+    tweetElement.classList.add('aerie-approved');
+  } else if (status === 'filtered') {
+    tweetElement.classList.add('aerie-filtered');
+  } else {
+    tweetElement.classList.add('aerie-pending');
+  }
+}
+
 // Process a tweet element - check status and show/hide accordingly
 async function processTweet(tweetElement) {
   const tweetId = getTweetId(tweetElement);
   if (!tweetId) return;
 
+  // Check if already processed with same ID
+  const existingStatus = tweetElement.getAttribute('data-aerie-status');
+  const existingId = tweetElement.getAttribute('data-aerie-id');
+
+  if (existingId === tweetId && existingStatus) {
+    // Already processed this exact element with this ID
+    return;
+  }
+
+  // Mark that we're processing this tweet
+  tweetElement.setAttribute('data-aerie-id', tweetId);
+
   // Check cache first
   if (statusCache.has(tweetId)) {
     const status = statusCache.get(tweetId);
-    if (status === 'approved') {
-      tweetElement.classList.add('aerie-approved');
-    } else if (status === 'filtered') {
-      tweetElement.classList.add('aerie-filtered');
+    applyStatus(tweetElement, status);
+    if (status === 'pending' || status === 'unknown') {
+      pendingTweets.set(tweetId, tweetElement);
     }
-    // 'pending' stays hidden
     return;
   }
 
@@ -72,15 +98,12 @@ async function processTweet(tweetElement) {
 
   if (statuses[tweetId]) {
     statusCache.set(tweetId, statuses[tweetId]);
-    pendingTweets.delete(tweetId);
+    applyStatus(tweetElement, statuses[tweetId]);
 
-    if (statuses[tweetId] === 'approved') {
-      tweetElement.classList.add('aerie-approved');
-    } else if (statuses[tweetId] === 'filtered') {
-      tweetElement.classList.add('aerie-filtered');
+    if (statuses[tweetId] !== 'pending' && statuses[tweetId] !== 'unknown') {
+      pendingTweets.delete(tweetId);
     }
   }
-  // If not in backend yet, it stays hidden and we'll poll for it
 }
 
 // Batch process multiple tweets
@@ -91,13 +114,19 @@ async function processTweets(tweetElements) {
     const tweetId = getTweetId(element);
     if (!tweetId) continue;
 
+    // Check if already processed
+    const existingId = element.getAttribute('data-aerie-id');
+    const existingStatus = element.getAttribute('data-aerie-status');
+    if (existingId === tweetId && existingStatus) continue;
+
+    element.setAttribute('data-aerie-id', tweetId);
+
     // Check cache first
     if (statusCache.has(tweetId)) {
       const status = statusCache.get(tweetId);
-      if (status === 'approved') {
-        element.classList.add('aerie-approved');
-      } else if (status === 'filtered') {
-        element.classList.add('aerie-filtered');
+      applyStatus(element, status);
+      if (status === 'pending' || status === 'unknown') {
+        pendingTweets.set(tweetId, element);
       }
       continue;
     }
@@ -116,36 +145,50 @@ async function processTweets(tweetElements) {
   for (const { id, element } of tweetsToCheck) {
     if (statuses[id]) {
       statusCache.set(id, statuses[id]);
-      pendingTweets.delete(id);
+      applyStatus(element, statuses[id]);
 
-      if (statuses[id] === 'approved') {
-        element.classList.add('aerie-approved');
-      } else if (statuses[id] === 'filtered') {
-        element.classList.add('aerie-filtered');
+      if (statuses[id] !== 'pending' && statuses[id] !== 'unknown') {
+        pendingTweets.delete(id);
       }
     }
-    // If not in backend yet, stays hidden and pending
   }
 }
 
 // Poll for updates on pending tweets
 async function pollForUpdates() {
+  // Also rescan visible tweets to catch any that lost their status
+  const allTweets = findTweetElements();
+  for (const tweet of allTweets) {
+    const tweetId = tweet.getAttribute('data-aerie-id') || getTweetId(tweet);
+    if (!tweetId) continue;
+
+    // If this tweet has a cached status but lost its visual state, reapply
+    if (statusCache.has(tweetId)) {
+      const cachedStatus = statusCache.get(tweetId);
+      const currentStatus = tweet.getAttribute('data-aerie-status');
+      if (currentStatus !== cachedStatus) {
+        applyStatus(tweet, cachedStatus);
+      }
+    } else if (!tweet.hasAttribute('data-aerie-status')) {
+      // New tweet we haven't seen, process it
+      pendingTweets.set(tweetId, tweet);
+      tweet.setAttribute('data-aerie-id', tweetId);
+    }
+  }
+
   if (pendingTweets.size === 0) return;
 
   const ids = Array.from(pendingTweets.keys());
   const statuses = await checkTweetStatuses(ids);
 
   for (const [id, element] of pendingTweets) {
-    if (statuses[id] && statuses[id] !== 'pending') {
+    if (statuses[id]) {
       statusCache.set(id, statuses[id]);
-      pendingTweets.delete(id);
+      applyStatus(element, statuses[id]);
 
-      if (statuses[id] === 'approved') {
-        element.classList.add('aerie-approved');
-        console.log(`[Aerie] Revealed tweet ${id}`);
-      } else if (statuses[id] === 'filtered') {
-        element.classList.add('aerie-filtered');
-        console.log(`[Aerie] Filtered tweet ${id}`);
+      if (statuses[id] !== 'pending' && statuses[id] !== 'unknown') {
+        pendingTweets.delete(id);
+        console.log(`[Aerie] Tweet ${id}: ${statuses[id]}`);
       }
     }
   }
