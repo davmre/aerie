@@ -1,10 +1,10 @@
 """SQLite database operations for tweet storage."""
 
-import sqlite3
 import json
-from pathlib import Path
+import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "tweets.db"
 
@@ -107,7 +107,8 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     with transaction(db_path) as conn:
         for tweet in tweets:
             try:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO tweets (
                         id, text, created_at, captured_at,
                         author_id, author_username, author_display_name, author_verified,
@@ -116,30 +117,32 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         is_retweet, is_quote, quoted_tweet_id,
                         media_json, urls_json, hashtags_json, mentions_json
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    tweet["id"],
-                    tweet["text"],
-                    tweet.get("created_at"),
-                    tweet.get("captured_at", datetime.utcnow().isoformat()),
-                    tweet.get("author", {}).get("id"),
-                    tweet.get("author", {}).get("username"),
-                    tweet.get("author", {}).get("display_name"),
-                    1 if tweet.get("author", {}).get("verified") else 0,
-                    tweet.get("metrics", {}).get("retweet_count", 0),
-                    tweet.get("metrics", {}).get("reply_count", 0),
-                    tweet.get("metrics", {}).get("like_count", 0),
-                    tweet.get("metrics", {}).get("quote_count", 0),
-                    tweet.get("reply_to", {}).get("tweet_id"),
-                    tweet.get("reply_to", {}).get("user_id"),
-                    tweet.get("reply_to", {}).get("username"),
-                    1 if tweet.get("is_retweet") else 0,
-                    1 if tweet.get("is_quote") else 0,
-                    tweet.get("quoted_tweet_id"),
-                    json.dumps(tweet.get("media", [])),
-                    json.dumps(tweet.get("urls", [])),
-                    json.dumps(tweet.get("hashtags", [])),
-                    json.dumps(tweet.get("mentions", [])),
-                ))
+                """,
+                    (
+                        tweet["id"],
+                        tweet["text"],
+                        tweet.get("created_at"),
+                        tweet.get("captured_at", datetime.utcnow().isoformat()),
+                        tweet.get("author", {}).get("id"),
+                        tweet.get("author", {}).get("username"),
+                        tweet.get("author", {}).get("display_name"),
+                        1 if tweet.get("author", {}).get("verified") else 0,
+                        tweet.get("metrics", {}).get("retweet_count", 0),
+                        tweet.get("metrics", {}).get("reply_count", 0),
+                        tweet.get("metrics", {}).get("like_count", 0),
+                        tweet.get("metrics", {}).get("quote_count", 0),
+                        tweet.get("reply_to", {}).get("tweet_id"),
+                        tweet.get("reply_to", {}).get("user_id"),
+                        tweet.get("reply_to", {}).get("username"),
+                        1 if tweet.get("is_retweet") else 0,
+                        1 if tweet.get("is_quote") else 0,
+                        tweet.get("quoted_tweet_id"),
+                        json.dumps(tweet.get("media", [])),
+                        json.dumps(tweet.get("urls", [])),
+                        json.dumps(tweet.get("hashtags", [])),
+                        json.dumps(tweet.get("mentions", [])),
+                    ),
+                )
                 inserted += 1
             except sqlite3.IntegrityError:
                 # Duplicate tweet ID - this is expected and fine
@@ -151,52 +154,67 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
 def get_pending_tweets(limit: int = 100, db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
     """Get tweets that haven't been classified yet."""
     with transaction(db_path) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT * FROM tweets
             WHERE classification_status = 'pending'
             ORDER BY captured_at DESC
             LIMIT ?
-        """, (limit,)).fetchall()
+        """,
+            (limit,),
+        ).fetchall()
         return [dict(row) for row in rows]
 
 
-def get_approved_tweets(limit: int = 100, offset: int = 0, db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
+def get_approved_tweets(
+    limit: int = 100, offset: int = 0, db_path: Path = DEFAULT_DB_PATH
+) -> list[dict]:
     """Get tweets that passed classification."""
     with transaction(db_path) as conn:
-        rows = conn.execute("""
+        rows = conn.execute(
+            """
             SELECT * FROM tweets
             WHERE classification_result = 1
             ORDER BY created_at DESC
             LIMIT ? OFFSET ?
-        """, (limit, offset)).fetchall()
+        """,
+            (limit, offset),
+        ).fetchall()
         return [dict(row) for row in rows]
 
 
-def update_classification(tweet_id: str, approved: bool, reason: str = None,
-                          db_path: Path = DEFAULT_DB_PATH):
+def update_classification(
+    tweet_id: str, approved: bool, reason: str = None, db_path: Path = DEFAULT_DB_PATH
+):
     """Update a tweet's classification status."""
     with transaction(db_path) as conn:
-        conn.execute("""
+        conn.execute(
+            """
             UPDATE tweets SET
                 classification_status = 'completed',
                 classification_result = ?,
                 classification_reason = ?,
                 classified_at = ?
             WHERE id = ?
-        """, (1 if approved else 0, reason, datetime.utcnow().isoformat(), tweet_id))
+        """,
+            (1 if approved else 0, reason, datetime.utcnow().isoformat(), tweet_id),
+        )
 
 
 def approve_all_pending(db_path: Path = DEFAULT_DB_PATH) -> int:
     """Approve all pending tweets. Returns count of approved tweets."""
     with transaction(db_path) as conn:
-        cursor = conn.execute("""
+        cursor = conn.execute(
+            """
             UPDATE tweets SET
                 classification_status = 'completed',
                 classification_result = 1,
                 classification_reason = 'auto-approved',
                 classified_at = ?
             WHERE classification_status = 'pending'
-        """, (datetime.utcnow().isoformat(),))
+        """,
+            (datetime.utcnow().isoformat(),),
+        )
         return cursor.rowcount
 
 
@@ -210,12 +228,14 @@ def get_all_classified_ids(db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
         """).fetchall()
 
         return {
-            row['id']: 'approved' if row['classification_result'] == 1 else 'filtered'
+            row["id"]: "approved" if row["classification_result"] == 1 else "filtered"
             for row in rows
         }
 
 
-def check_tweet_statuses(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
+def check_tweet_statuses(
+    tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, str]:
     """
     Check the classification status of multiple tweets.
     Returns a dict mapping tweet_id -> status ('approved', 'filtered', 'pending', or 'unknown').
@@ -225,25 +245,30 @@ def check_tweet_statuses(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) 
 
     with transaction(db_path) as conn:
         # Use IN clause with placeholders
-        placeholders = ','.join('?' * len(tweet_ids))
-        rows = conn.execute(f"""
+        placeholders = ",".join("?" * len(tweet_ids))
+        rows = conn.execute(
+            f"""
             SELECT id, classification_status, classification_result
             FROM tweets
             WHERE id IN ({placeholders})
-        """, tweet_ids).fetchall()
+        """,
+            tweet_ids,
+        ).fetchall()
 
         result = {}
         for row in rows:
-            tweet_id = row['id']
-            if row['classification_status'] == 'completed':
-                result[tweet_id] = 'approved' if row['classification_result'] == 1 else 'filtered'
+            tweet_id = row["id"]
+            if row["classification_status"] == "completed":
+                result[tweet_id] = (
+                    "approved" if row["classification_result"] == 1 else "filtered"
+                )
             else:
-                result[tweet_id] = 'pending'
+                result[tweet_id] = "pending"
 
         # Mark any IDs not in database as 'unknown'
         for tweet_id in tweet_ids:
             if tweet_id not in result:
-                result[tweet_id] = 'unknown'
+                result[tweet_id] = "unknown"
 
         return result
 

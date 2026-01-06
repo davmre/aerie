@@ -29,8 +29,9 @@ The goal is to filter out ragebait, doomposting, and low-quality content before 
             │
             ▼
 ┌─────────────────────────┐
-│  Classifier (TODO)      │
-│  LLM-based filtering    │
+│  Classifier             │
+│  (Claude API)           │
+│  └── classifier.py      │
 └─────────────────────────┘
 ```
 
@@ -124,11 +125,37 @@ Key fields in the `tweets` table:
 2. Load extension: Firefox → `about:debugging` → Load Temporary Add-on → select `extension/manifest.json`
 3. Browse twitter.com - tweets are captured automatically
 4. Check stats: `curl http://localhost:8080/stats`
+5. Run classifier: `cd collector && python classifier.py`
+
+## Classifier Usage
+
+The classifier uses Claude to evaluate each pending tweet against a filter prompt.
+
+```bash
+# Set your API key
+export ANTHROPIC_API_KEY="your-key-here"
+
+# Classify all pending tweets
+python classifier.py
+
+# Classify with verbose output
+python classifier.py --verbose
+
+# Dry run (no changes saved)
+python classifier.py --dry-run --verbose
+
+# Use custom filter prompt
+python classifier.py --prompt-file filter_prompt.txt
+
+# Limit to 20 tweets, use faster/cheaper model
+python classifier.py --max 20 --model claude-3-haiku-20240307
+```
+
+The default filter prompt approves informative/positive/creative content and filters ragebait, doomposting, engagement farming, etc. Customize by editing `filter_prompt.txt` or creating your own.
 
 ## TODO
 
-- [ ] LLM classifier to process pending tweets
-- [ ] User-configurable filter prompts
-- [ ] Background/scheduled capture (headless browser)
+- [ ] Background/scheduled classification (cron or daemon)
 - [ ] Better visual treatment options (configurable)
 - [ ] Handle rate limiting gracefully
+- [ ] Batch API calls for efficiency (messages batches API)
