@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""
+Aerie Tweet Collector Server
+
+A simple Flask server that receives tweets from the browser extension
+and stores them in SQLite for later classification.
+"""
+
+from flask import Flask, request, jsonify
+from database import init_database, store_tweets, get_stats, get_pending_tweets, get_approved_tweets
+
+app = Flask(__name__)
+
+
+@app.before_request
+def ensure_db():
+    """Initialize database on first request."""
+    if not hasattr(app, '_db_initialized'):
+        init_database()
+        app._db_initialized = True
+
+
+@app.route("/tweets", methods=["POST"])
+def receive_tweets():
+    """
+    Receive tweets from the browser extension.
+    Expects JSON body: {"tweets": [...]}
+    """
+    data = request.get_json()
+    if not data or "tweets" not in data:
+        return jsonify({"error": "Missing 'tweets' field"}), 400
+
+    tweets = data["tweets"]
+    if not isinstance(tweets, list):
+        return jsonify({"error": "'tweets' must be an array"}), 400
+
+    result = store_tweets(tweets)
+
+    return jsonify({
+        "status": "ok",
+        "received": len(tweets),
+        "inserted": result["inserted"],
+        "duplicates": result["duplicates"],
+    })
+
+
+@app.route("/stats", methods=["GET"])
+def stats():
+    """Get database statistics."""
+    return jsonify(get_stats())
+
+
+@app.route("/tweets/pending", methods=["GET"])
+def pending_tweets():
+    """Get tweets awaiting classification."""
+    limit = request.args.get("limit", 100, type=int)
+    tweets = get_pending_tweets(limit)
+    return jsonify({"tweets": tweets, "count": len(tweets)})
+
+
+@app.route("/tweets/approved", methods=["GET"])
+def approved_tweets():
+    """Get tweets that passed classification."""
+    limit = request.args.get("limit", 100, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    tweets = get_approved_tweets(limit, offset)
+    return jsonify({"tweets": tweets, "count": len(tweets)})
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Health check endpoint."""
+    return jsonify({"status": "ok"})
+
+
+if __name__ == "__main__":
+    print("Aerie Tweet Collector")
+    print("=====================")
+    print("Starting server on http://localhost:8080")
+    print("The browser extension will POST captured tweets here.")
+    print()
+
+    init_database()
+    app.run(host="127.0.0.1", port=8080, debug=True)
