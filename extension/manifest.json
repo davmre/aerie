@@ -7,7 +7,9 @@
     "webRequest",
     "webRequestBlocking",
     "*://*.twitter.com/*",
-    "*://*.x.com/*"
+    "*://*.x.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "scripts": ["background.js"],

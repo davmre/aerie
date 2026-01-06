@@ -3,20 +3,18 @@
 
 const COLLECTOR_URL = "http://localhost:8080/tweets";
 
-// Twitter API endpoints that contain timeline data
+// Twitter API endpoints that contain timeline/tweet data
 const TIMELINE_PATTERNS = [
   /\/graphql\/[^/]+\/Home(Timeline|LatestTimeline)/,
   /\/graphql\/[^/]+\/UserTweets/,
   /\/graphql\/[^/]+\/TweetDetail/,
-  /\/2\/timeline\/home/,
+  /\/graphql\/[^/]+\/Following/,
+  /\/graphql\/[^/]+\/ForYou/,
 ];
 
 function isTimelineEndpoint(url) {
   return TIMELINE_PATTERNS.some(pattern => pattern.test(url));
 }
-
-// Track pending responses (url -> {chunks, encoding})
-const pendingResponses = new Map();
 
 browser.webRequest.onHeadersReceived.addListener(
   (details) => {
@@ -24,18 +22,8 @@ browser.webRequest.onHeadersReceived.addListener(
       return;
     }
 
-    // Find content-encoding header
-    let encoding = "identity";
-    for (const header of details.responseHeaders || []) {
-      if (header.name.toLowerCase() === "content-encoding") {
-        encoding = header.value.toLowerCase();
-        break;
-      }
-    }
-
-    console.log(`[Aerie] Intercepting timeline response: ${details.url} (encoding: ${encoding})`);
-
     // Use filterResponseData to read the response body
+    // Note: Firefox gives us already-decompressed data
     const filter = browser.webRequest.filterResponseData(details.requestId);
     const chunks = [];
 
@@ -57,21 +45,12 @@ browser.webRequest.onHeadersReceived.addListener(
       }
 
       try {
-        // Decompress if needed
-        let text;
-        if (encoding === "gzip" || encoding === "deflate" || encoding === "br") {
-          const decompressed = await decompress(combined, encoding);
-          text = new TextDecoder().decode(decompressed);
-        } else {
-          text = new TextDecoder().decode(combined);
-        }
-
-        // Parse JSON and extract tweets
+        const text = new TextDecoder().decode(combined);
         const data = JSON.parse(text);
         const tweets = extractTweets(data);
 
         if (tweets.length > 0) {
-          console.log(`[Aerie] Extracted ${tweets.length} tweets, sending to collector`);
+          console.log(`[Aerie] Captured ${tweets.length} tweets`);
           sendToCollector(tweets);
         }
       } catch (err) {
@@ -86,32 +65,6 @@ browser.webRequest.onHeadersReceived.addListener(
   { urls: ["*://*.twitter.com/*", "*://*.x.com/*"] },
   ["blocking", "responseHeaders"]
 );
-
-// Decompress response body
-async function decompress(data, encoding) {
-  let decompressionStream;
-
-  if (encoding === "gzip") {
-    decompressionStream = new DecompressionStream("gzip");
-  } else if (encoding === "deflate") {
-    decompressionStream = new DecompressionStream("deflate");
-  } else if (encoding === "br") {
-    // Brotli - DecompressionStream doesn't support it in all browsers
-    // Fall back to trying gzip, or return as-is
-    try {
-      decompressionStream = new DecompressionStream("gzip");
-    } catch {
-      console.warn("[Aerie] Brotli decompression not supported, trying raw");
-      return data;
-    }
-  } else {
-    return data;
-  }
-
-  const stream = new Blob([data]).stream().pipeThrough(decompressionStream);
-  const response = new Response(stream);
-  return new Uint8Array(await response.arrayBuffer());
-}
 
 // Extract tweet objects from Twitter's nested API response
 function extractTweets(data) {
@@ -231,11 +184,11 @@ async function sendToCollector(tweets) {
       console.error(`[Aerie] Collector returned ${response.status}`);
     } else {
       const result = await response.json();
-      console.log(`[Aerie] Collector response:`, result);
+      console.log(`[Aerie] Stored: ${result.inserted} new, ${result.duplicates} duplicates`);
     }
   } catch (err) {
     // Collector might not be running - that's okay, log and continue
-    console.warn(`[Aerie] Could not reach collector at ${COLLECTOR_URL}:`, err.message);
+    console.warn(`[Aerie] Could not reach collector: ${err.message}`);
   }
 }
 

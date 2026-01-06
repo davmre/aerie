@@ -20,12 +20,25 @@ def ensure_db():
         app._db_initialized = True
 
 
-@app.route("/tweets", methods=["POST"])
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers to allow requests from browser extensions."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+@app.route("/tweets", methods=["POST", "OPTIONS"])
 def receive_tweets():
     """
     Receive tweets from the browser extension.
     Expects JSON body: {"tweets": [...]}
     """
+    # Handle CORS preflight
+    if request.method == "OPTIONS":
+        return "", 204
+
     data = request.get_json()
     if not data or "tweets" not in data:
         return jsonify({"error": "Missing 'tweets' field"}), 400
