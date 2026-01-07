@@ -113,6 +113,8 @@ function renderTweet(tweet, index) {
         : `https://twitter.com/i/status/${tweet.id}`;
     const retweetedBy = tweet.retweeted_by || [];
 
+    const threadAncestors = tweet.thread_ancestors || [];
+
     return `
         <div class="tweet" data-index="${index}" data-id="${tweet.id}" onclick="selectTweet(${index})">
             ${retweetedBy.length > 0 ? `
@@ -120,6 +122,7 @@ function renderTweet(tweet, index) {
                     🔁 Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
                 </div>
             ` : ''}
+            ${threadAncestors.length > 0 ? renderThreadContext(threadAncestors) : ''}
             <div class="tweet-header">
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
@@ -315,6 +318,31 @@ function renderQuotedTweet(qt) {
                 <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
             </div>
             <div class="quoted-tweet-text">${escapeHtml(qt.text || '')}</div>
+        </div>
+    `;
+}
+
+// Render thread context (ancestor tweets)
+function renderThreadContext(ancestors) {
+    if (!ancestors || ancestors.length === 0) return '';
+    return `
+        <div class="thread-context" onclick="event.stopPropagation()">
+            <div class="thread-label">🧵 Thread context (${ancestors.length} earlier ${ancestors.length === 1 ? 'post' : 'posts'})</div>
+            ${ancestors.map(a => {
+                const url = a.author_username
+                    ? `https://twitter.com/${a.author_username}/status/${a.id}`
+                    : `https://twitter.com/i/status/${a.id}`;
+                return `
+                    <div class="thread-ancestor">
+                        <div class="thread-ancestor-header">
+                            <span class="tweet-author">${escapeHtml(a.author_display_name || a.author_username || 'Unknown')}</span>
+                            <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
+                            <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+                        </div>
+                        <div class="thread-ancestor-text">${escapeHtml(a.text || '')}</div>
+                    </div>
+                `;
+            }).join('')}
         </div>
     `;
 }

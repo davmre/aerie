@@ -12,7 +12,7 @@ from database import (
     get_approved_tweets, check_tweet_statuses, update_classification,
     approve_all_pending, get_all_classified_ids, list_modes,
     add_human_label, get_human_labels, transaction, get_prompt_responses_batch,
-    get_retweets_batch, get_tweets_batch,
+    get_retweets_batch, get_tweets_batch, get_thread_context_batch,
 )
 from modes import decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes
 from classifier import setup_prompts_and_modes
@@ -343,6 +343,12 @@ def api_ui_tweets():
     if quoted_tweet_ids:
         quoted_tweets = get_tweets_batch(quoted_tweet_ids)
 
+    # Get thread context for replies
+    reply_tweet_ids = [t["id"] for t in tweets if t.get("reply_to_tweet_id")]
+    thread_context = {}
+    if reply_tweet_ids:
+        thread_context = get_thread_context_batch(reply_tweet_ids)
+
     # Enrich tweets
     for tweet in tweets:
         tid = tweet["id"]
@@ -354,6 +360,9 @@ def api_ui_tweets():
         # Add quoted tweet data if this is a quote tweet
         if tweet.get("quoted_tweet_id"):
             tweet["quoted_tweet"] = quoted_tweets.get(tweet["quoted_tweet_id"])
+        # Add thread context if this is a reply
+        if tweet.get("reply_to_tweet_id"):
+            tweet["thread_ancestors"] = thread_context.get(tid, [])
 
     return jsonify({"tweets": tweets, "total": total})
 

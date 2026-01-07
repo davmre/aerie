@@ -813,6 +813,74 @@ def get_tweets_batch(
         return {row["id"]: dict(row) for row in rows}
 
 
+def get_thread_ancestors(
+    tweet_id: str, max_depth: int = 10, db_path: Path = DEFAULT_DB_PATH
+) -> list[dict]:
+    """
+    Get thread ancestors (parent tweets by same author).
+    Returns a list of ancestor tweets in chronological order (oldest first).
+    Stops when:
+    - No more parent tweets
+    - Parent is by a different author (not a thread continuation)
+    - Max depth reached
+    - Parent tweet not in database
+    """
+    ancestors = []
+    current_id = tweet_id
+
+    with transaction(db_path) as conn:
+        # First get the original tweet to know the author
+        original = conn.execute(
+            "SELECT author_username, reply_to_tweet_id FROM tweets WHERE id = ?",
+            (current_id,)
+        ).fetchone()
+
+        if not original or not original["reply_to_tweet_id"]:
+            return []
+
+        thread_author = original["author_username"]
+        current_id = original["reply_to_tweet_id"]
+
+        for _ in range(max_depth):
+            row = conn.execute(
+                "SELECT * FROM tweets WHERE id = ?", (current_id,)
+            ).fetchone()
+
+            if not row:
+                # Parent not in database
+                break
+
+            parent = dict(row)
+
+            # Check if this is part of the same thread (same author)
+            if parent.get("author_username") != thread_author:
+                # Different author - this is a reply to someone else, not a thread
+                # Still include it as context but stop climbing
+                ancestors.insert(0, parent)
+                break
+
+            ancestors.insert(0, parent)
+
+            # Move to next parent
+            if not parent.get("reply_to_tweet_id"):
+                break
+            current_id = parent["reply_to_tweet_id"]
+
+    return ancestors
+
+
+def get_thread_context_batch(
+    tweet_ids: list[str], max_depth: int = 10, db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, list[dict]]:
+    """Get thread ancestors for multiple tweets at once."""
+    result = {}
+    for tid in tweet_ids:
+        ancestors = get_thread_ancestors(tid, max_depth, db_path)
+        if ancestors:
+            result[tid] = ancestors
+    return result
+
+
 if __name__ == "__main__":
     # Initialize database when run directly
     init_database()
