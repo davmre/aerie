@@ -66,6 +66,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 reply_to_username TEXT,
                 is_retweet INTEGER DEFAULT 0,
                 is_quote INTEGER DEFAULT 0,
+                is_promoted INTEGER DEFAULT 0,
                 quoted_tweet_id TEXT,
 
                 -- Structured data stored as JSON
@@ -154,6 +155,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             ("author_bio", "TEXT"),
             ("author_following", "INTEGER"),
             ("author_followers_count", "INTEGER"),
+            ("is_promoted", "INTEGER DEFAULT 0"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
@@ -175,7 +177,8 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
         for tweet in tweets:
             try:
                 author = tweet.get("author", {})
-                conn.execute(
+                text = tweet["text"]
+                result = conn.execute(
                     """
                     INSERT INTO tweets (
                         id, text, created_at, captured_at,
@@ -183,13 +186,21 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         author_blue_verified, author_bio, author_following, author_followers_count,
                         retweet_count, reply_count, like_count, quote_count,
                         reply_to_tweet_id, reply_to_user_id, reply_to_username,
-                        is_retweet, is_quote, quoted_tweet_id,
+                        is_retweet, is_quote, is_promoted, quoted_tweet_id,
                         media_json, urls_json, hashtags_json, mentions_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        text = CASE WHEN length(excluded.text) > length(tweets.text) THEN excluded.text ELSE tweets.text END,
+                        author_username = COALESCE(excluded.author_username, tweets.author_username),
+                        author_display_name = COALESCE(excluded.author_display_name, tweets.author_display_name),
+                        author_bio = COALESCE(excluded.author_bio, tweets.author_bio),
+                        author_following = COALESCE(excluded.author_following, tweets.author_following),
+                        author_followers_count = COALESCE(excluded.author_followers_count, tweets.author_followers_count),
+                        is_promoted = MAX(tweets.is_promoted, excluded.is_promoted)
                 """,
                     (
                         tweet["id"],
-                        tweet["text"],
+                        text,
                         tweet.get("created_at"),
                         tweet.get("captured_at", datetime.utcnow().isoformat()),
                         author.get("id"),
@@ -209,6 +220,7 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         tweet.get("reply_to", {}).get("username"),
                         1 if tweet.get("is_retweet") else 0,
                         1 if tweet.get("is_quote") else 0,
+                        1 if tweet.get("is_promoted") else 0,
                         tweet.get("quoted_tweet_id"),
                         json.dumps(tweet.get("media", [])),
                         json.dumps(tweet.get("urls", [])),
@@ -216,9 +228,13 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         json.dumps(tweet.get("mentions", [])),
                     ),
                 )
-                inserted += 1
+                # rowcount is 1 for insert, 1 for update (if changes made), 0 for no-op update
+                if result.rowcount > 0:
+                    inserted += 1
+                else:
+                    duplicates += 1
             except sqlite3.IntegrityError:
-                # Duplicate tweet ID - this is expected and fine
+                # Shouldn't happen with ON CONFLICT, but just in case
                 duplicates += 1
 
     return {"inserted": inserted, "duplicates": duplicates}

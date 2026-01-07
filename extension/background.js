@@ -69,15 +69,34 @@ function extractTweets(data) {
   const tweets = [];
   const seen = new Set();
 
-  function traverse(obj, parent = null) {
+  function traverse(obj, parent = null, grandparent = null) {
     if (!obj || typeof obj !== "object") return;
+
+    // Check for promoted content indicators at the entry/item level
+    // Promoted tweets are often wrapped in special entry types
+    const isPromoted = !!(
+      obj.promotedMetadata ||
+      obj.advertiser_results ||
+      parent?.promotedMetadata ||
+      parent?.advertiser_results ||
+      obj.entryId?.includes("promoted") ||
+      obj.entryId?.includes("cursor-ad") ||
+      parent?.entryId?.includes("promoted")
+    );
+
+    // Build context info to pass to normalizeTweet
+    const contextInfo = {
+      isPromoted,
+      entryId: obj.entryId || parent?.entryId,
+      entryType: obj.__typename || obj.entryType,
+    };
 
     // Look for tweet_results.result pattern (most reliable)
     if (obj.tweet_results?.result) {
       const tweetObj = obj.tweet_results.result;
       // Handle tombstone tweets (deleted/unavailable)
       if (tweetObj.__typename === "Tweet" || tweetObj.legacy?.full_text !== undefined) {
-        const tweet = normalizeTweet(tweetObj);
+        const tweet = normalizeTweet(tweetObj, contextInfo);
         if (tweet && !seen.has(tweet.id)) {
           seen.add(tweet.id);
           tweets.push(tweet);
@@ -89,7 +108,7 @@ function extractTweets(data) {
     if (obj.__typename === "Tweet" && obj.legacy?.full_text !== undefined) {
       // Only process if we have user info (to avoid duplicates from above)
       if (obj.core?.user_results || obj.user_results) {
-        const tweet = normalizeTweet(obj);
+        const tweet = normalizeTweet(obj, contextInfo);
         if (tweet && !seen.has(tweet.id)) {
           seen.add(tweet.id);
           tweets.push(tweet);
@@ -100,11 +119,11 @@ function extractTweets(data) {
     // Recurse into arrays and objects
     if (Array.isArray(obj)) {
       for (const item of obj) {
-        traverse(item, obj);
+        traverse(item, obj, parent);
       }
     } else {
       for (const value of Object.values(obj)) {
-        traverse(value, obj);
+        traverse(value, obj, parent);
       }
     }
   }
@@ -114,10 +133,17 @@ function extractTweets(data) {
 }
 
 // Normalize a tweet object into our standard schema
-function normalizeTweet(raw) {
+function normalizeTweet(raw, contextInfo = {}) {
   try {
     // Handle both direct tweet objects and wrapped ones
     const legacy = raw.legacy || raw;
+
+    // Extract full text - prefer note_tweet for long-form content
+    const noteTweetText = raw.note_tweet?.note_tweet_results?.result?.text;
+    const fullText = noteTweetText || legacy.full_text || legacy.text || "";
+
+    // Check if this is a promoted/ad tweet
+    const isPromoted = contextInfo.isPromoted || false;
 
     // Twitter has multiple paths to user data - try them all
     const userResult =
@@ -151,7 +177,7 @@ function normalizeTweet(raw) {
 
     return {
       id: String(id),
-      text: legacy.full_text || legacy.text || "",
+      text: fullText,
       created_at: legacy.created_at || null,
       author: {
         id: authorId,
@@ -176,6 +202,7 @@ function normalizeTweet(raw) {
       },
       is_retweet: !!legacy.retweeted_status_result,
       is_quote: !!raw.quoted_status_result,
+      is_promoted: isPromoted,
       quoted_tweet_id: raw.quoted_status_result?.result?.rest_id ||
                        legacy.quoted_status_id_str || null,
       media: extractMedia(legacy.extended_entities || legacy.entities),
