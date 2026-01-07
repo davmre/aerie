@@ -130,9 +130,15 @@ function renderTweet(tweet) {
     const tweetUrl = tweet.author_username
         ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
         : `https://twitter.com/i/status/${tweet.id}`;
+    const retweetedBy = tweet.retweeted_by || [];
 
     return `
         <div class="tweet read-tweet">
+            ${retweetedBy.length > 0 ? `
+                <div class="retweeted-by">
+                    🔁 Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
+                </div>
+            ` : ''}
             <div class="tweet-header">
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>

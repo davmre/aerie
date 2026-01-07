@@ -8,10 +8,11 @@ and stores them in SQLite for later classification.
 
 from flask import Flask, request, jsonify, render_template
 from database import (
-    init_database, store_tweets, get_stats, get_pending_tweets,
+    init_database, store_tweets, store_retweets, get_stats, get_pending_tweets,
     get_approved_tweets, check_tweet_statuses, update_classification,
     approve_all_pending, get_all_classified_ids, list_modes,
     add_human_label, get_human_labels, transaction, get_prompt_responses_batch,
+    get_retweets_batch,
 )
 from modes import decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes
 from classifier import setup_prompts_and_modes
@@ -40,7 +41,7 @@ def add_cors_headers(response):
 def receive_tweets():
     """
     Receive tweets from the browser extension.
-    Expects JSON body: {"tweets": [...]}
+    Expects JSON body: {"tweets": [...], "retweets": [...]}
     """
     # Handle CORS preflight
     if request.method == "OPTIONS":
@@ -56,11 +57,19 @@ def receive_tweets():
 
     result = store_tweets(tweets)
 
+    # Also store retweets if provided
+    retweets = data.get("retweets", [])
+    rt_result = {"inserted": 0, "duplicates": 0}
+    if retweets:
+        rt_result = store_retweets(retweets)
+
     return jsonify({
         "status": "ok",
         "received": len(tweets),
         "inserted": result["inserted"],
         "duplicates": result["duplicates"],
+        "retweets_received": len(retweets),
+        "retweets_inserted": rt_result["inserted"],
     })
 
 
@@ -325,6 +334,9 @@ def api_ui_tweets():
         for row in rows:
             human_labels[row["tweet_id"]] = bool(row["should_show"])
 
+    # Get retweet info
+    retweets_by_tweet = get_retweets_batch(tweet_ids)
+
     # Enrich tweets
     for tweet in tweets:
         tid = tweet["id"]
@@ -332,6 +344,7 @@ def api_ui_tweets():
         tweet["mode_decisions"] = all_mode_decisions.get(tid, {})
         tweet["responses"] = responses_by_tweet.get(tid, [])
         tweet["human_label"] = human_labels.get(tid)
+        tweet["retweeted_by"] = retweets_by_tweet.get(tid, [])
 
     return jsonify({"tweets": tweets, "total": total})
 

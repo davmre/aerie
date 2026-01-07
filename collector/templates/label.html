@@ -111,9 +111,15 @@ function renderTweet(tweet, index) {
     const tweetUrl = tweet.author_username
         ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
         : `https://twitter.com/i/status/${tweet.id}`;
+    const retweetedBy = tweet.retweeted_by || [];
 
     return `
         <div class="tweet" data-index="${index}" data-id="${tweet.id}" onclick="selectTweet(${index})">
+            ${retweetedBy.length > 0 ? `
+                <div class="retweeted-by">
+                    🔁 Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
+                </div>
+            ` : ''}
             <div class="tweet-header">
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
@@ -132,7 +138,6 @@ function renderTweet(tweet, index) {
                 <span>${tweet.like_count || 0} likes</span>
                 <span>${tweet.retweet_count || 0} RTs</span>
                 <span>${tweet.reply_count || 0} replies</span>
-                ${tweet.is_retweet ? '<span>[RT]</span>' : ''}
                 ${tweet.is_quote ? '<span>[QT]</span>' : ''}
             </div>
 

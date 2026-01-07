@@ -140,8 +140,22 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 FOREIGN KEY (mode_id) REFERENCES modes(id)
             );
 
+            -- Track retweets: who retweeted which original tweet
+            -- The original tweet is stored in tweets table; this tracks the retweet relationship
+            CREATE TABLE IF NOT EXISTS retweets (
+                original_tweet_id TEXT NOT NULL,
+                retweeter_user_id TEXT,
+                retweeter_username TEXT NOT NULL,
+                retweeter_display_name TEXT,
+                retweeted_at TEXT NOT NULL,
+                captured_at TEXT NOT NULL,
+                PRIMARY KEY (original_tweet_id, retweeter_username),
+                FOREIGN KEY (original_tweet_id) REFERENCES tweets(id)
+            );
+
             -- Indexes for new tables
             CREATE INDEX IF NOT EXISTS idx_prompt_responses_tweet ON prompt_responses(tweet_id);
+            CREATE INDEX IF NOT EXISTS idx_retweets_original ON retweets(original_tweet_id);
             CREATE INDEX IF NOT EXISTS idx_prompt_responses_prompt ON prompt_responses(prompt_id);
             CREATE INDEX IF NOT EXISTS idx_human_labels_mode ON human_labels(mode_id);
         """)
@@ -238,6 +252,90 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                 duplicates += 1
 
     return {"inserted": inserted, "duplicates": duplicates}
+
+
+def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
+    """
+    Store retweet records. Each record links a retweeter to an original tweet.
+    Expected format: {
+        "original_tweet_id": "...",
+        "retweeter_user_id": "...",
+        "retweeter_username": "...",
+        "retweeter_display_name": "...",
+        "retweeted_at": "...",
+        "captured_at": "..."
+    }
+    """
+    if not retweets:
+        return {"inserted": 0, "duplicates": 0}
+
+    inserted = 0
+    duplicates = 0
+
+    with transaction(db_path) as conn:
+        for rt in retweets:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO retweets (
+                        original_tweet_id, retweeter_user_id, retweeter_username,
+                        retweeter_display_name, retweeted_at, captured_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(original_tweet_id, retweeter_username) DO NOTHING
+                """,
+                    (
+                        rt["original_tweet_id"],
+                        rt.get("retweeter_user_id"),
+                        rt["retweeter_username"],
+                        rt.get("retweeter_display_name"),
+                        rt.get("retweeted_at"),
+                        rt.get("captured_at", datetime.utcnow().isoformat()),
+                    ),
+                )
+                inserted += 1
+            except sqlite3.IntegrityError:
+                duplicates += 1
+
+    return {"inserted": inserted, "duplicates": duplicates}
+
+
+def get_retweets_for_tweet(tweet_id: str, db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
+    """Get all retweet records for a given original tweet."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM retweets
+            WHERE original_tweet_id = ?
+            ORDER BY retweeted_at DESC
+        """,
+            (tweet_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_retweets_batch(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, list[dict]]:
+    """Get retweet records for multiple tweets at once."""
+    if not tweet_ids:
+        return {}
+
+    with transaction(db_path) as conn:
+        placeholders = ",".join("?" * len(tweet_ids))
+        rows = conn.execute(
+            f"""
+            SELECT * FROM retweets
+            WHERE original_tweet_id IN ({placeholders})
+            ORDER BY retweeted_at DESC
+        """,
+            tweet_ids,
+        ).fetchall()
+
+        result = {}
+        for row in rows:
+            tid = row["original_tweet_id"]
+            if tid not in result:
+                result[tid] = []
+            result[tid].append(dict(row))
+        return result
 
 
 def get_pending_tweets(limit: int = 100, db_path: Path = DEFAULT_DB_PATH) -> list[dict]:

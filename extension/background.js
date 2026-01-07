@@ -45,11 +45,11 @@ browser.webRequest.onHeadersReceived.addListener(
       try {
         const text = new TextDecoder().decode(combined);
         const data = JSON.parse(text);
-        const tweets = extractTweets(data);
+        const { tweets, retweets } = extractTweetsAndRetweets(data);
 
-        if (tweets.length > 0) {
-          console.log(`[Aerie] Captured ${tweets.length} tweets`);
-          sendToCollector(tweets);
+        if (tweets.length > 0 || retweets.length > 0) {
+          console.log(`[Aerie] Captured ${tweets.length} tweets, ${retweets.length} retweets`);
+          sendToCollector(tweets, retweets);
         }
       } catch (err) {
         console.error("[Aerie] Error processing response:", err);
@@ -65,15 +65,69 @@ browser.webRequest.onHeadersReceived.addListener(
 );
 
 // Extract tweet objects from Twitter's nested API response
-function extractTweets(data) {
+// Returns {tweets: [], retweets: []} where retweets link retweeters to original tweets
+function extractTweetsAndRetweets(data) {
   const tweets = [];
-  const seen = new Set();
+  const retweets = [];
+  const seenTweets = new Set();
+  const seenRetweets = new Set(); // "originalId:retweeterUsername"
+
+  function processTweet(tweetObj, contextInfo) {
+    const legacy = tweetObj.legacy || tweetObj;
+
+    // Check if this is a retweet
+    const retweetedResult = legacy.retweeted_status_result?.result;
+    if (retweetedResult) {
+      // This is a retweet - extract the original tweet and create a retweet record
+
+      // Get retweeter info from the current tweet
+      const retweeterResult = tweetObj.core?.user_results?.result || tweetObj.user_results?.result || {};
+      const retweeterCore = retweeterResult.core || {};
+      const retweeterLegacy = retweeterResult.legacy || {};
+
+      const retweeterUsername = retweeterCore.screen_name || retweeterLegacy.screen_name;
+      const retweeterDisplayName = retweeterCore.name || retweeterLegacy.name;
+      const retweeterUserId = retweeterResult.rest_id || retweeterLegacy.id_str;
+
+      // Normalize and store the original tweet
+      const originalTweet = normalizeTweet(retweetedResult, { ...contextInfo, isPromoted: false });
+      if (originalTweet && !seenTweets.has(originalTweet.id)) {
+        seenTweets.add(originalTweet.id);
+        tweets.push(originalTweet);
+      }
+
+      // Create retweet record if we have the original and retweeter info
+      if (originalTweet && retweeterUsername) {
+        const rtKey = `${originalTweet.id}:${retweeterUsername}`;
+        if (!seenRetweets.has(rtKey)) {
+          seenRetweets.add(rtKey);
+          retweets.push({
+            original_tweet_id: originalTweet.id,
+            retweeter_user_id: retweeterUserId,
+            retweeter_username: retweeterUsername,
+            retweeter_display_name: retweeterDisplayName,
+            retweeted_at: legacy.created_at || null,
+            captured_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Don't add the "RT @..." wrapper tweet - we only want the original
+      return;
+    }
+
+    // Not a retweet - process normally
+    const tweet = normalizeTweet(tweetObj, contextInfo);
+    if (tweet && !seenTweets.has(tweet.id)) {
+      seenTweets.add(tweet.id);
+      tweets.push(tweet);
+    }
+  }
 
   function traverse(obj, parent = null, grandparent = null) {
     if (!obj || typeof obj !== "object") return;
 
     // Check for promoted content indicators at the entry/item level
-    // Promoted tweets are often wrapped in special entry types
     const isPromoted = !!(
       obj.promotedMetadata ||
       obj.advertiser_results ||
@@ -84,7 +138,6 @@ function extractTweets(data) {
       parent?.entryId?.includes("promoted")
     );
 
-    // Build context info to pass to normalizeTweet
     const contextInfo = {
       isPromoted,
       entryId: obj.entryId || parent?.entryId,
@@ -94,25 +147,15 @@ function extractTweets(data) {
     // Look for tweet_results.result pattern (most reliable)
     if (obj.tweet_results?.result) {
       const tweetObj = obj.tweet_results.result;
-      // Handle tombstone tweets (deleted/unavailable)
       if (tweetObj.__typename === "Tweet" || tweetObj.legacy?.full_text !== undefined) {
-        const tweet = normalizeTweet(tweetObj, contextInfo);
-        if (tweet && !seen.has(tweet.id)) {
-          seen.add(tweet.id);
-          tweets.push(tweet);
-        }
+        processTweet(tweetObj, contextInfo);
       }
     }
 
     // Also look for direct Tweet objects (fallback)
     if (obj.__typename === "Tweet" && obj.legacy?.full_text !== undefined) {
-      // Only process if we have user info (to avoid duplicates from above)
       if (obj.core?.user_results || obj.user_results) {
-        const tweet = normalizeTweet(obj, contextInfo);
-        if (tweet && !seen.has(tweet.id)) {
-          seen.add(tweet.id);
-          tweets.push(tweet);
-        }
+        processTweet(obj, contextInfo);
       }
     }
 
@@ -129,7 +172,7 @@ function extractTweets(data) {
   }
 
   traverse(data);
-  return tweets;
+  return { tweets, retweets };
 }
 
 // Normalize a tweet object into our standard schema
@@ -238,22 +281,25 @@ function extractUrls(entities) {
   }));
 }
 
-// Send extracted tweets to local collector service
-async function sendToCollector(tweets) {
+// Send extracted tweets and retweets to local collector service
+async function sendToCollector(tweets, retweets = []) {
   try {
     const response = await fetch(COLLECTOR_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ tweets }),
+      body: JSON.stringify({ tweets, retweets }),
     });
 
     if (!response.ok) {
       console.error(`[Aerie] Collector returned ${response.status}`);
     } else {
       const result = await response.json();
-      console.log(`[Aerie] Stored: ${result.inserted} new, ${result.duplicates} duplicates`);
+      const rtInfo = result.retweets_inserted !== undefined
+        ? `, ${result.retweets_inserted} retweets`
+        : '';
+      console.log(`[Aerie] Stored: ${result.inserted} new, ${result.duplicates} duplicates${rtInfo}`);
     }
   } catch (err) {
     // Collector might not be running - that's okay, log and continue
