@@ -134,11 +134,12 @@ function renderTweet(tweet, index) {
 
             <div class="tweet-text">${renderTextWithUrls(tweet.text || '', tweet.urls)}</div>
 
+            ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
+
             <div class="tweet-metrics">
                 <span>${tweet.like_count || 0} likes</span>
                 <span>${tweet.retweet_count || 0} RTs</span>
                 <span>${tweet.reply_count || 0} replies</span>
-                ${tweet.is_quote ? '<span>[QT]</span>' : ''}
             </div>
 
             ${tweet.responses && tweet.responses.length > 0 ? renderResponses(tweet.responses) : ''}
@@ -298,6 +299,24 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// Render quoted tweet
+function renderQuotedTweet(qt) {
+    if (!qt) return '';
+    const qtUrl = qt.author_username
+        ? `https://twitter.com/${qt.author_username}/status/${qt.id}`
+        : `https://twitter.com/i/status/${qt.id}`;
+    return `
+        <div class="quoted-tweet" onclick="event.stopPropagation()">
+            <div class="quoted-tweet-header">
+                <span class="tweet-author">${escapeHtml(qt.author_display_name || qt.author_username || 'Unknown')}</span>
+                <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
+                <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+            </div>
+            <div class="quoted-tweet-text">${escapeHtml(qt.text || '')}</div>
+        </div>
+    `;
 }
 
 // Render text with clickable URLs
