@@ -69,26 +69,42 @@ function extractTweets(data) {
   const tweets = [];
   const seen = new Set();
 
-  function traverse(obj) {
+  function traverse(obj, parent = null) {
     if (!obj || typeof obj !== "object") return;
 
-    // Twitter wraps tweets in various structures - look for the telltale signs
-    if (obj.__typename === "Tweet" || obj.legacy?.full_text !== undefined) {
-      const tweet = normalizeTweet(obj);
-      if (tweet && !seen.has(tweet.id)) {
-        seen.add(tweet.id);
-        tweets.push(tweet);
+    // Look for tweet_results.result pattern (most reliable)
+    if (obj.tweet_results?.result) {
+      const tweetObj = obj.tweet_results.result;
+      // Handle tombstone tweets (deleted/unavailable)
+      if (tweetObj.__typename === "Tweet" || tweetObj.legacy?.full_text !== undefined) {
+        const tweet = normalizeTweet(tweetObj);
+        if (tweet && !seen.has(tweet.id)) {
+          seen.add(tweet.id);
+          tweets.push(tweet);
+        }
+      }
+    }
+
+    // Also look for direct Tweet objects (fallback)
+    if (obj.__typename === "Tweet" && obj.legacy?.full_text !== undefined) {
+      // Only process if we have user info (to avoid duplicates from above)
+      if (obj.core?.user_results || obj.user_results) {
+        const tweet = normalizeTweet(obj);
+        if (tweet && !seen.has(tweet.id)) {
+          seen.add(tweet.id);
+          tweets.push(tweet);
+        }
       }
     }
 
     // Recurse into arrays and objects
     if (Array.isArray(obj)) {
       for (const item of obj) {
-        traverse(item);
+        traverse(item, obj);
       }
     } else {
       for (const value of Object.values(obj)) {
-        traverse(value);
+        traverse(value, obj);
       }
     }
   }
@@ -102,22 +118,50 @@ function normalizeTweet(raw) {
   try {
     // Handle both direct tweet objects and wrapped ones
     const legacy = raw.legacy || raw;
-    const core = raw.core?.user_results?.result || {};
-    const userLegacy = core.legacy || {};
+
+    // Twitter has multiple paths to user data - try them all
+    const userResult =
+      raw.core?.user_results?.result ||  // Most common path
+      raw.user_results?.result ||         // Alternative path
+      raw.author?.result ||               // Another alternative
+      {};
+    const userLegacy = userResult.legacy || {};
+
+    // Sometimes user is directly on legacy
+    const legacyUser = legacy.user || {};
 
     // Extract tweet ID - could be in various places
     const id = raw.rest_id || legacy.id_str || legacy.id;
     if (!id) return null;
+
+    // Try multiple sources for author info
+    const authorUsername = userLegacy.screen_name || legacyUser.screen_name || legacy.user_screen_name || null;
+    const authorDisplayName = userLegacy.name || legacyUser.name || legacy.user_name || null;
+    const authorId = userResult.rest_id || userLegacy.id_str || legacyUser.id_str || legacy.user_id_str || null;
+    const authorVerified = userLegacy.verified || legacyUser.verified || false;
+
+    // Debug: log when we can't find author info
+    if (!authorUsername) {
+      console.log("[Aerie] Tweet missing author info:", {
+        id,
+        hasCore: !!raw.core,
+        hasCoreUserResults: !!raw.core?.user_results,
+        hasUserResults: !!raw.user_results,
+        hasLegacyUser: !!legacy.user,
+        rawKeys: Object.keys(raw),
+        legacyKeys: legacy ? Object.keys(legacy) : [],
+      });
+    }
 
     return {
       id: String(id),
       text: legacy.full_text || legacy.text || "",
       created_at: legacy.created_at || null,
       author: {
-        id: core.rest_id || userLegacy.id_str || legacy.user_id_str || null,
-        username: userLegacy.screen_name || null,
-        display_name: userLegacy.name || null,
-        verified: userLegacy.verified || false,
+        id: authorId,
+        username: authorUsername,
+        display_name: authorDisplayName,
+        verified: authorVerified,
       },
       metrics: {
         retweet_count: legacy.retweet_count || 0,

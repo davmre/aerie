@@ -127,6 +127,9 @@ function loadMore() {
 function renderTweet(tweet) {
     const response = tweet.responses?.[0];
     const reason = response?.response?.reason || '';
+    const tweetUrl = tweet.author_username
+        ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
+        : `https://twitter.com/i/status/${tweet.id}`;
 
     return `
         <div class="tweet read-tweet">
@@ -136,11 +139,11 @@ function renderTweet(tweet) {
                     <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
                 </div>
                 <div class="tweet-meta">
-                    ${formatDate(tweet.created_at)}
+                    <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
                 </div>
             </div>
 
-            <div class="tweet-text">${escapeHtml(tweet.text || '')}</div>
+            <div class="tweet-text">${renderTextWithUrls(tweet.text || '', tweet.urls)}</div>
 
             <div class="tweet-metrics">
                 <span>${tweet.like_count || 0} likes</span>
@@ -151,6 +154,45 @@ function renderTweet(tweet) {
             ${reason ? `<div class="reason-tooltip">Approved: ${escapeHtml(reason)}</div>` : ''}
         </div>
     `;
+}
+
+function renderTextWithUrls(text, urls) {
+    if (!text) return '';
+    let result = escapeHtml(text);
+
+    // Parse URLs from the tweet's urls field if available
+    if (urls) {
+        try {
+            const urlList = typeof urls === 'string' ? JSON.parse(urls) : urls;
+            if (Array.isArray(urlList)) {
+                for (const u of urlList) {
+                    const shortUrl = escapeHtml(u.url || '');
+                    const expandedUrl = u.expanded_url || u.url;
+                    const displayUrl = u.display_url || expandedUrl;
+                    if (shortUrl && expandedUrl) {
+                        result = result.replace(
+                            shortUrl,
+                            `<a href="${escapeHtml(expandedUrl)}" target="_blank" rel="noopener">${escapeHtml(displayUrl)}</a>`
+                        );
+                    }
+                }
+            }
+        } catch (e) {
+            console.error('Failed to parse urls:', e);
+        }
+    }
+
+    // Also find any remaining URLs not in the urls list
+    result = result.replace(
+        /(https?:\/\/[^\s<]+)/g,
+        (match) => {
+            // Don't double-wrap already-linked URLs
+            if (result.indexOf(`href="${match}"`) !== -1) return match;
+            return `<a href="${match}" target="_blank" rel="noopener">${match}</a>`;
+        }
+    );
+
+    return result;
 }
 
 function formatDate(dateStr) {
