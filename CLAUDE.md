@@ -99,15 +99,47 @@ Twitter's timeline data comes from endpoints like:
 
 The hash in the URL (e.g., `/graphql/abc123xyz/HomeTimeline`) changes periodically but the operation name at the end is stable.
 
+## Web UI
+
+The collector service includes web interfaces:
+
+- `/ui/label` - Labeling interface for creating ground truth data
+- `/ui/read` - Clean reading view for approved tweets
+
+Both UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution).
+
+## Design Principle: Context Symmetry
+
+**Human labelers and LLMs should see the same information when classifying tweets.**
+
+A tweet viewed in isolation may be ambiguous or misleading. Both humans and LLMs need context to make good decisions:
+
+| Context Type | What It Provides |
+|--------------|------------------|
+| **Quote tweets** | The original being commented on - essential for understanding the commentary |
+| **Thread ancestors** | Earlier posts in a thread - needed to understand later posts |
+| **Retweet attribution** | Who amplified this content - relevant for "who do I follow" decisions |
+
+If a human needs to click through to understand a tweet, an LLM would benefit from the same context. This principle guided our data model: we capture and display full context, not just individual tweets.
+
 ## Database Schema
 
 ### Core Tables
 
 **tweets** - Raw tweet data captured from Twitter
 - `id` - Tweet ID (primary key)
-- `text`, `author_username`, `created_at` - Basic tweet data
-- `classification_status` - 'pending' | 'completed' (legacy, for backwards compat)
-- `classification_result` - 1 (approved) | 0 (filtered) (legacy)
+- `text` - Full tweet text (uses note_tweet for long-form content)
+- `author_username`, `author_display_name`, `author_id`
+- `author_bio`, `author_following`, `author_blue_verified`, `author_followers_count`
+- `is_retweet`, `is_quote`, `is_promoted` - Tweet type flags
+- `quoted_tweet_id` - ID of quoted tweet (if quote tweet)
+- `reply_to_tweet_id`, `reply_to_username` - Thread/reply info
+- `classification_status` - 'pending' | 'completed' (legacy)
+
+**retweets** - Tracks who retweeted what (avoids duplicate tweet storage)
+- `original_tweet_id` - The original tweet being retweeted
+- `retweeter_username`, `retweeter_display_name`, `retweeter_user_id`
+- `retweeted_at`, `captured_at`
 
 **prompts** - Versioned prompt definitions
 - `id` - Prompt ID (e.g., "binary_filter_v1", "topic_tagger_v1")
@@ -128,6 +160,17 @@ The hash in the URL (e.g., `/graphql/abc123xyz/HomeTimeline`) changes periodical
 - `tweet_id`, `mode_id` - Composite primary key
 - `should_show` - 1 = show, 0 = hide
 - `notes` - Optional annotation
+
+### Retweet Handling
+
+When user A retweets user B's tweet:
+- **Old behavior**: Stored twice (A's "RT @B: ..." wrapper AND B's original)
+- **New behavior**: Store B's original once, create retweet record linking A → B
+
+This ensures:
+- Each tweet is rated once (rating applies to all retweets)
+- No duplicate entries in labeling UI
+- Retweeter attribution preserved for display
 
 ### Multi-Mode Architecture
 
