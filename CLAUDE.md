@@ -203,6 +203,11 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 
 ## Running the Project
 
+```bash
+# Activate the virtual environment first
+source .venv/bin/activate
+```
+
 1. Start collector: `cd collector && python server.py`
 2. Load extension: Firefox → `about:debugging` → Load Temporary Add-on → select `extension/manifest.json`
 3. Browse twitter.com - tweets are captured automatically
