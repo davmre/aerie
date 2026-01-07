@@ -134,7 +134,7 @@ If a human needs to click through to understand a tweet, an LLM would benefit fr
 - `is_retweet`, `is_quote`, `is_promoted` - Tweet type flags
 - `quoted_tweet_id` - ID of quoted tweet (if quote tweet)
 - `reply_to_tweet_id`, `reply_to_username` - Thread/reply info
-- `classification_status` - 'pending' | 'completed' (legacy)
+- ~~`classification_status`, `classification_result`~~ - DEPRECATED, use prompt_responses
 
 **retweets** - Tracks who retweeted what (avoids duplicate tweet storage)
 - `original_tweet_id` - The original tweet being retweeted
@@ -192,12 +192,14 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/tweets` | POST | Receive tweets from extension |
-| `/tweets/check` | POST | Check approval status of tweet IDs (supports `mode` param) |
-| `/tweets/classified-ids` | GET | Get all classified IDs (supports `mode` param) |
-| `/tweets/approve-all` | POST | Approve all pending (for testing) |
-| `/tweets/pending` | GET | Get pending tweets (for classifier) |
+| `/tweets/check` | POST | Check approval status of tweet IDs (mode defaults to "default") |
+| `/tweets/classified-ids` | GET | Get all classified IDs (mode defaults to "default") |
 | `/modes` | GET | List available filtering modes |
 | `/stats` | GET | Database statistics |
+| `/api/ui/tweets` | GET | Get tweets for web UI with full context |
+| `/api/ui/label` | POST | Add human label for a tweet |
+| `/ui/label` | GET | Web UI for labeling tweets |
+| `/ui/read` | GET | Web UI for reading approved tweets |
 
 ## Running the Project
 

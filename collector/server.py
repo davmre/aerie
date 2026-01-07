@@ -6,13 +6,13 @@ A simple Flask server that receives tweets from the browser extension
 and stores them in SQLite for later classification.
 """
 
+import json
+
 from flask import Flask, request, jsonify, render_template
 from database import (
-    init_database, store_tweets, store_retweets, get_stats, get_pending_tweets,
-    get_approved_tweets, check_tweet_statuses, update_classification,
-    approve_all_pending, get_all_classified_ids, list_modes,
-    add_human_label, get_human_labels, transaction, get_prompt_responses_batch,
-    get_retweets_batch, get_tweets_batch, get_thread_context_batch,
+    init_database, store_tweets, store_retweets, get_stats, list_modes,
+    add_human_label, transaction, get_prompt_responses_batch,
+    get_retweets_batch, get_tweets_batch, get_thread_context_batch, get_mode,
 )
 from modes import decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes
 from classifier import setup_prompts_and_modes
@@ -79,32 +79,12 @@ def stats():
     return jsonify(get_stats())
 
 
-@app.route("/tweets/pending", methods=["GET"])
-def pending_tweets():
-    """Get tweets awaiting classification."""
-    limit = request.args.get("limit", 100, type=int)
-    tweets = get_pending_tweets(limit)
-    return jsonify({"tweets": tweets, "count": len(tweets)})
-
-
-@app.route("/tweets/approved", methods=["GET"])
-def approved_tweets():
-    """Get tweets that passed classification."""
-    limit = request.args.get("limit", 100, type=int)
-    offset = request.args.get("offset", 0, type=int)
-    tweets = get_approved_tweets(limit, offset)
-    return jsonify({"tweets": tweets, "count": len(tweets)})
-
-
 @app.route("/tweets/check", methods=["POST", "OPTIONS"])
 def check_tweets():
     """
     Check the approval status of multiple tweets.
-    Expects JSON body: {"ids": ["123", "456", ...], "mode": "optional_mode_id"}
+    Expects JSON body: {"ids": ["123", "456", ...], "mode": "mode_id"}
     Returns: {"123": "approved", "456": "pending", ...}
-
-    If mode is specified, uses the new mode-based classification.
-    Otherwise falls back to legacy classification_result field.
     """
     if request.method == "OPTIONS":
         return "", 204
@@ -117,48 +97,28 @@ def check_tweets():
     if not isinstance(ids, list):
         return jsonify({"error": "'ids' must be an array"}), 400
 
-    mode_id = data.get("mode")
+    mode_id = data.get("mode", "default")
 
-    if mode_id:
-        # Use new mode-based classification
-        try:
-            statuses = decide_tweets_batch(ids, mode_id)
-        except KeyError as e:
-            return jsonify({"error": str(e)}), 400
-    else:
-        # Fall back to legacy classification
-        statuses = check_tweet_statuses(ids)
+    try:
+        statuses = decide_tweets_batch(ids, mode_id)
+    except KeyError as e:
+        return jsonify({"error": str(e)}), 400
 
     return jsonify(statuses)
-
-
-@app.route("/tweets/approve-all", methods=["POST", "OPTIONS"])
-def approve_all():
-    """Approve all pending tweets. For testing/debugging."""
-    if request.method == "OPTIONS":
-        return "", 204
-
-    count = approve_all_pending()
-    return jsonify({"approved": count})
 
 
 @app.route("/tweets/classified-ids", methods=["GET"])
 def classified_ids():
     """
     Get all classified tweet IDs for cache pre-population.
-    Optional query param: mode (uses mode-based classification)
+    Query param: mode (defaults to "default")
     """
-    mode_id = request.args.get("mode")
+    mode_id = request.args.get("mode", "default")
 
-    if mode_id:
-        # Use new mode-based classification
-        try:
-            ids = get_mode_status_for_all_tweets(mode_id)
-        except KeyError as e:
-            return jsonify({"error": str(e)}), 400
-    else:
-        # Fall back to legacy classification
-        ids = get_all_classified_ids()
+    try:
+        ids = get_mode_status_for_all_tweets(mode_id)
+    except KeyError as e:
+        return jsonify({"error": str(e)}), 400
 
     return jsonify(ids)
 
@@ -208,9 +168,6 @@ def api_ui_tweets():
     - limit: Number of tweets
     - offset: Pagination offset
     """
-    import json
-    from database import get_mode
-
     mode_id = request.args.get("mode", "default")
     status_filter = request.args.get("status", "all")
     search = request.args.get("search", "")

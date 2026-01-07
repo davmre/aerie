@@ -10,10 +10,13 @@ const pendingTweets = new Map();
 // Cache of known statuses to avoid repeated backend calls
 const statusCache = new Map(); // id -> 'approved' | 'pending' | 'filtered'
 
+// Mode for classification (matches server-side mode definitions)
+const DEFAULT_MODE = "default";
+
 // Pre-load cache with all classified tweets on init
 async function preloadCache() {
   try {
-    const response = await fetch(`${BACKEND_URL}/tweets/classified-ids`);
+    const response = await fetch(`${BACKEND_URL}/tweets/classified-ids?mode=${DEFAULT_MODE}`);
     if (response.ok) {
       const classified = await response.json();
       for (const [id, status] of Object.entries(classified)) {
@@ -48,7 +51,7 @@ async function checkTweetStatuses(tweetIds) {
     const response = await fetch(`${BACKEND_URL}/tweets/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: tweetIds })
+      body: JSON.stringify({ ids: tweetIds, mode: DEFAULT_MODE })
     });
 
     if (!response.ok) {

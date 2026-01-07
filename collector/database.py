@@ -75,9 +75,10 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 hashtags_json TEXT,
                 mentions_json TEXT,
 
-                -- Classification results (filled in later by the classifier)
+                -- DEPRECATED: Legacy classification fields (kept for migration compatibility)
+                -- Use prompt_responses table instead for classification results
                 classification_status TEXT DEFAULT 'pending',
-                classification_result INTEGER,  -- 1 = approved, 0 = filtered
+                classification_result INTEGER,
                 classification_reason TEXT,
                 classified_at TEXT
             );
@@ -86,7 +87,6 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_tweets_captured_at ON tweets(captured_at);
             CREATE INDEX IF NOT EXISTS idx_tweets_created_at ON tweets(created_at);
             CREATE INDEX IF NOT EXISTS idx_tweets_author ON tweets(author_username);
-            CREATE INDEX IF NOT EXISTS idx_tweets_classification ON tweets(classification_status);
             CREATE INDEX IF NOT EXISTS idx_tweets_reply_to ON tweets(reply_to_tweet_id);
 
             -- Track capture sessions for debugging/analytics
@@ -338,141 +338,30 @@ def get_retweets_batch(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) ->
         return result
 
 
-def get_pending_tweets(limit: int = 100, db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
-    """Get tweets that haven't been classified yet."""
-    with transaction(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM tweets
-            WHERE classification_status = 'pending'
-            ORDER BY captured_at DESC
-            LIMIT ?
-        """,
-            (limit,),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-
-def get_approved_tweets(
-    limit: int = 100, offset: int = 0, db_path: Path = DEFAULT_DB_PATH
-) -> list[dict]:
-    """Get tweets that passed classification."""
-    with transaction(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM tweets
-            WHERE classification_result = 1
-            ORDER BY created_at DESC
-            LIMIT ? OFFSET ?
-        """,
-            (limit, offset),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-
-def update_classification(
-    tweet_id: str, approved: bool, reason: str = None, db_path: Path = DEFAULT_DB_PATH
-):
-    """Update a tweet's classification status."""
-    with transaction(db_path) as conn:
-        conn.execute(
-            """
-            UPDATE tweets SET
-                classification_status = 'completed',
-                classification_result = ?,
-                classification_reason = ?,
-                classified_at = ?
-            WHERE id = ?
-        """,
-            (1 if approved else 0, reason, datetime.utcnow().isoformat(), tweet_id),
-        )
-
-
-def approve_all_pending(db_path: Path = DEFAULT_DB_PATH) -> int:
-    """Approve all pending tweets. Returns count of approved tweets."""
-    with transaction(db_path) as conn:
-        cursor = conn.execute(
-            """
-            UPDATE tweets SET
-                classification_status = 'completed',
-                classification_result = 1,
-                classification_reason = 'auto-approved',
-                classified_at = ?
-            WHERE classification_status = 'pending'
-        """,
-            (datetime.utcnow().isoformat(),),
-        )
-        return cursor.rowcount
-
-
-def get_all_classified_ids(db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
-    """Get all classified tweet IDs with their status. For cache pre-population."""
-    with transaction(db_path) as conn:
-        rows = conn.execute("""
-            SELECT id, classification_result
-            FROM tweets
-            WHERE classification_status = 'completed'
-        """).fetchall()
-
-        return {
-            row["id"]: "approved" if row["classification_result"] == 1 else "filtered"
-            for row in rows
-        }
-
-
-def check_tweet_statuses(
-    tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH
-) -> dict[str, str]:
-    """
-    Check the classification status of multiple tweets.
-    Returns a dict mapping tweet_id -> status ('approved', 'filtered', 'pending', or 'unknown').
-    """
-    if not tweet_ids:
-        return {}
-
-    with transaction(db_path) as conn:
-        # Use IN clause with placeholders
-        placeholders = ",".join("?" * len(tweet_ids))
-        rows = conn.execute(
-            f"""
-            SELECT id, classification_status, classification_result
-            FROM tweets
-            WHERE id IN ({placeholders})
-        """,
-            tweet_ids,
-        ).fetchall()
-
-        result = {}
-        for row in rows:
-            tweet_id = row["id"]
-            if row["classification_status"] == "completed":
-                result[tweet_id] = (
-                    "approved" if row["classification_result"] == 1 else "filtered"
-                )
-            else:
-                result[tweet_id] = "pending"
-
-        # Mark any IDs not in database as 'unknown'
-        for tweet_id in tweet_ids:
-            if tweet_id not in result:
-                result[tweet_id] = "unknown"
-
-        return result
-
-
-def get_stats(db_path: Path = DEFAULT_DB_PATH) -> dict:
-    """Get database statistics."""
+def get_stats(prompt_id: str = "binary_filter_v1", db_path: Path = DEFAULT_DB_PATH) -> dict:
+    """Get database statistics based on prompt responses."""
     with transaction(db_path) as conn:
         total = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
-        pending = conn.execute(
-            "SELECT COUNT(*) FROM tweets WHERE classification_status = 'pending'"
-        ).fetchone()[0]
+
+        # Count tweets with responses
         approved = conn.execute(
-            "SELECT COUNT(*) FROM tweets WHERE classification_result = 1"
+            """
+            SELECT COUNT(*) FROM prompt_responses
+            WHERE prompt_id = ? AND json_extract(response_json, '$.approved') = 1
+            """,
+            (prompt_id,),
         ).fetchone()[0]
+
         filtered = conn.execute(
-            "SELECT COUNT(*) FROM tweets WHERE classification_result = 0"
+            """
+            SELECT COUNT(*) FROM prompt_responses
+            WHERE prompt_id = ? AND json_extract(response_json, '$.approved') = 0
+            """,
+            (prompt_id,),
         ).fetchone()[0]
+
+        # Pending = total - classified
+        pending = total - approved - filtered
 
         return {
             "total": total,
