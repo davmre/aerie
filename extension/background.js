@@ -125,6 +125,9 @@ function normalizeTweet(raw) {
       raw.user_results?.result ||         // Alternative path
       raw.author?.result ||               // Another alternative
       {};
+
+    // Twitter now nests screen_name/name in userResult.core (not userResult.legacy)
+    const userCore = userResult.core || {};
     const userLegacy = userResult.legacy || {};
 
     // Sometimes user is directly on legacy
@@ -134,24 +137,17 @@ function normalizeTweet(raw) {
     const id = raw.rest_id || legacy.id_str || legacy.id;
     if (!id) return null;
 
-    // Try multiple sources for author info
-    const authorUsername = userLegacy.screen_name || legacyUser.screen_name || legacy.user_screen_name || null;
-    const authorDisplayName = userLegacy.name || legacyUser.name || legacy.user_name || null;
+    // Try multiple sources for author info - userCore is the new primary location
+    const authorUsername = userCore.screen_name || userLegacy.screen_name || legacyUser.screen_name || legacy.user_screen_name || null;
+    const authorDisplayName = userCore.name || userLegacy.name || legacyUser.name || legacy.user_name || null;
     const authorId = userResult.rest_id || userLegacy.id_str || legacyUser.id_str || legacy.user_id_str || null;
     const authorVerified = userLegacy.verified || legacyUser.verified || false;
 
-    // Debug: log when we can't find author info
-    if (!authorUsername) {
-      console.log("[Aerie] Tweet missing author info:", {
-        id,
-        hasCore: !!raw.core,
-        hasCoreUserResults: !!raw.core?.user_results,
-        hasUserResults: !!raw.user_results,
-        hasLegacyUser: !!legacy.user,
-        rawKeys: Object.keys(raw),
-        legacyKeys: legacy ? Object.keys(legacy) : [],
-      });
-    }
+    // Additional author info useful for classification
+    const authorBio = userResult.profile_bio?.description || userLegacy.description || null;
+    const authorFollowing = userResult.relationship_perspectives?.following ?? null;
+    const authorBlueVerified = userResult.is_blue_verified ?? null;
+    const authorFollowersCount = userLegacy.followers_count ?? null;
 
     return {
       id: String(id),
@@ -162,6 +158,10 @@ function normalizeTweet(raw) {
         username: authorUsername,
         display_name: authorDisplayName,
         verified: authorVerified,
+        blue_verified: authorBlueVerified,
+        bio: authorBio,
+        following: authorFollowing,
+        followers_count: authorFollowersCount,
       },
       metrics: {
         retweet_count: legacy.retweet_count || 0,

@@ -49,6 +49,10 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 author_username TEXT,
                 author_display_name TEXT,
                 author_verified INTEGER DEFAULT 0,
+                author_blue_verified INTEGER,
+                author_bio TEXT,
+                author_following INTEGER,
+                author_followers_count INTEGER,
 
                 -- Engagement metrics
                 retweet_count INTEGER DEFAULT 0,
@@ -141,6 +145,20 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_human_labels_mode ON human_labels(mode_id);
         """)
 
+        # Migration: Add new author columns if they don't exist
+        cursor = conn.execute("PRAGMA table_info(tweets)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        new_columns = [
+            ("author_blue_verified", "INTEGER"),
+            ("author_bio", "TEXT"),
+            ("author_following", "INTEGER"),
+            ("author_followers_count", "INTEGER"),
+        ]
+        for col_name, col_type in new_columns:
+            if col_name not in existing_columns:
+                conn.execute(f"ALTER TABLE tweets ADD COLUMN {col_name} {col_type}")
+
 
 def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     """
@@ -156,26 +174,32 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     with transaction(db_path) as conn:
         for tweet in tweets:
             try:
+                author = tweet.get("author", {})
                 conn.execute(
                     """
                     INSERT INTO tweets (
                         id, text, created_at, captured_at,
                         author_id, author_username, author_display_name, author_verified,
+                        author_blue_verified, author_bio, author_following, author_followers_count,
                         retweet_count, reply_count, like_count, quote_count,
                         reply_to_tweet_id, reply_to_user_id, reply_to_username,
                         is_retweet, is_quote, quoted_tweet_id,
                         media_json, urls_json, hashtags_json, mentions_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         tweet["id"],
                         tweet["text"],
                         tweet.get("created_at"),
                         tweet.get("captured_at", datetime.utcnow().isoformat()),
-                        tweet.get("author", {}).get("id"),
-                        tweet.get("author", {}).get("username"),
-                        tweet.get("author", {}).get("display_name"),
-                        1 if tweet.get("author", {}).get("verified") else 0,
+                        author.get("id"),
+                        author.get("username"),
+                        author.get("display_name"),
+                        1 if author.get("verified") else 0,
+                        1 if author.get("blue_verified") else (0 if author.get("blue_verified") is False else None),
+                        author.get("bio"),
+                        1 if author.get("following") else (0 if author.get("following") is False else None),
+                        author.get("followers_count"),
                         tweet.get("metrics", {}).get("retweet_count", 0),
                         tweet.get("metrics", {}).get("reply_count", 0),
                         tweet.get("metrics", {}).get("like_count", 0),
