@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Aerie{% endblock %}</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
+            line-height: 1.5;
+        }
+
+        a {
+            color: #6cb6ff;
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            border-bottom: 1px solid #333;
+            padding: 15px 0;
+            margin-bottom: 20px;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: inline;
+        }
+
+        nav {
+            display: inline;
+            margin-left: 30px;
+        }
+
+        nav a {
+            margin-right: 20px;
+            color: #888;
+        }
+
+        nav a:hover, nav a.active {
+            color: #e0e0e0;
+        }
+
+        .stats {
+            float: right;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        /* Tweet card styles */
+        .tweet {
+            background: #161616;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            transition: border-color 0.15s;
+        }
+
+        .tweet:hover {
+            border-color: #444;
+        }
+
+        .tweet.selected {
+            border-color: #6cb6ff;
+            background: #1a1f2e;
+        }
+
+        .tweet-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .tweet-author {
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .tweet-username {
+            color: #666;
+            margin-left: 6px;
+        }
+
+        .tweet-meta {
+            color: #555;
+            font-size: 0.85rem;
+        }
+
+        .tweet-text {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-bottom: 12px;
+        }
+
+        .tweet-metrics {
+            display: flex;
+            gap: 16px;
+            color: #666;
+            font-size: 0.85rem;
+        }
+
+        .tweet-metrics span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-approved {
+            background: #1a3d1a;
+            color: #4ade80;
+        }
+
+        .status-filtered {
+            background: #3d1a1a;
+            color: #f87171;
+        }
+
+        .status-pending {
+            background: #3d3d1a;
+            color: #facc15;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #222;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.15s;
+        }
+
+        .btn:hover {
+            background: #333;
+            border-color: #555;
+        }
+
+        .btn-approve {
+            background: #1a3d1a;
+            border-color: #2d5a2d;
+        }
+
+        .btn-approve:hover {
+            background: #2d5a2d;
+        }
+
+        .btn-filter {
+            background: #3d1a1a;
+            border-color: #5a2d2d;
+        }
+
+        .btn-filter:hover {
+            background: #5a2d2d;
+        }
+
+        .btn-small {
+            padding: 3px 8px;
+            font-size: 0.8rem;
+        }
+
+        /* Form controls */
+        select, input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            font-size: 0.9rem;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: #6cb6ff;
+        }
+
+        /* Controls bar */
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            color: #888;
+            font-size: 0.9rem;
+        }
+
+        /* Keyboard shortcuts help */
+        .keyboard-help {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.8rem;
+            color: #888;
+        }
+
+        .keyboard-help kbd {
+            background: #333;
+            border: 1px solid #555;
+            border-radius: 3px;
+            padding: 2px 6px;
+            margin-right: 4px;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        /* Response viewer */
+        .responses {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #2a2a2a;
+        }
+
+        .response-item {
+            background: #0d0d0d;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            color: #888;
+        }
+
+        .response-json {
+            font-family: monospace;
+            white-space: pre-wrap;
+            color: #aaa;
+        }
+
+        /* Mode decisions */
+        .mode-decisions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .mode-decision {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: #1a1a1a;
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        /* Labeling buttons */
+        .label-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .label-btn {
+            flex: 1;
+            padding: 8px;
+            border-radius: 6px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+
+        .label-btn.show {
+            background: #1a3d1a;
+            color: #4ade80;
+        }
+
+        .label-btn.hide {
+            background: #3d1a1a;
+            color: #f87171;
+        }
+
+        .label-btn:hover {
+            filter: brightness(1.2);
+        }
+
+        .label-btn.active {
+            border-color: currentColor;
+        }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Aerie</h1>
+            <nav>
+                <a href="/ui/label" class="{% if active_page == 'label' %}active{% endif %}">Label</a>
+                <a href="/ui/read" class="{% if active_page == 'read' %}active{% endif %}">Read</a>
+            </nav>
+            <div class="stats" id="stats"></div>
+        </header>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+        // Fetch and display stats
+        fetch('/stats')
+            .then(r => r.json())
+            .then(stats => {
+                document.getElementById('stats').textContent =
+                    `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+            });
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

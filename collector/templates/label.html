@@ -1,0 +1,297 @@
+{% extends "base.html" %}
+
+{% block title %}Label Tweets - Aerie{% endblock %}
+
+{% block content %}
+<div class="controls">
+    <label>Mode:</label>
+    <select id="mode-select">
+        {% for mode in modes %}
+        <option value="{{ mode.id }}">{{ mode.name }}</option>
+        {% endfor %}
+    </select>
+
+    <label>Filter:</label>
+    <select id="status-filter">
+        <option value="all">All</option>
+        <option value="pending">Pending</option>
+        <option value="approved">Approved</option>
+        <option value="filtered">Filtered</option>
+        <option value="unlabeled">Unlabeled (by human)</option>
+    </select>
+
+    <label>Show:</label>
+    <select id="show-responses">
+        <option value="collapsed">Responses collapsed</option>
+        <option value="expanded">Responses expanded</option>
+    </select>
+
+    <input type="text" id="search" placeholder="Search author or text..." style="flex: 1; min-width: 150px;">
+</div>
+
+<div id="tweets-container">
+    <div class="loading">Loading tweets...</div>
+</div>
+
+<div class="pagination" id="pagination"></div>
+
+<div class="keyboard-help">
+    <div><kbd>j</kbd> / <kbd>k</kbd> Navigate</div>
+    <div><kbd>y</kbd> Label show | <kbd>n</kbd> Label hide</div>
+    <div><kbd>e</kbd> Expand/collapse responses</div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PAGE_SIZE = 20;
+let currentPage = 0;
+let tweets = [];
+let selectedIndex = -1;
+let currentMode = 'default';
+let showResponses = false;
+
+// DOM elements
+const container = document.getElementById('tweets-container');
+const modeSelect = document.getElementById('mode-select');
+const statusFilter = document.getElementById('status-filter');
+const showResponsesSelect = document.getElementById('show-responses');
+const searchInput = document.getElementById('search');
+const pagination = document.getElementById('pagination');
+
+// Load tweets
+async function loadTweets() {
+    container.innerHTML = '<div class="loading">Loading tweets...</div>';
+
+    const mode = modeSelect.value;
+    const status = statusFilter.value;
+    const search = searchInput.value;
+
+    currentMode = mode;
+
+    try {
+        const params = new URLSearchParams({
+            mode: mode,
+            limit: PAGE_SIZE,
+            offset: currentPage * PAGE_SIZE,
+        });
+        if (status !== 'all') params.set('status', status);
+        if (search) params.set('search', search);
+
+        const response = await fetch(`/api/ui/tweets?${params}`);
+        const data = await response.json();
+
+        tweets = data.tweets;
+        renderTweets();
+        renderPagination(data.total);
+    } catch (err) {
+        container.innerHTML = `<div class="loading">Error loading tweets: ${err.message}</div>`;
+    }
+}
+
+// Render tweet list
+function renderTweets() {
+    if (tweets.length === 0) {
+        container.innerHTML = '<div class="loading">No tweets found</div>';
+        return;
+    }
+
+    container.innerHTML = tweets.map((tweet, i) => renderTweet(tweet, i)).join('');
+
+    // Restore selection
+    if (selectedIndex >= 0 && selectedIndex < tweets.length) {
+        selectTweet(selectedIndex);
+    }
+}
+
+// Render single tweet
+function renderTweet(tweet, index) {
+    const modeStatus = tweet.mode_status || 'pending';
+    const humanLabel = tweet.human_label;
+
+    return `
+        <div class="tweet" data-index="${index}" data-id="${tweet.id}" onclick="selectTweet(${index})">
+            <div class="tweet-header">
+                <div>
+                    <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
+                    <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                </div>
+                <div class="tweet-meta">
+                    <span class="status-badge status-${modeStatus}">${modeStatus}</span>
+                    ${humanLabel !== null ? `<span class="status-badge" style="margin-left: 6px; background: #1a1a3d; color: #a0a0ff;">human: ${humanLabel ? 'show' : 'hide'}</span>` : ''}
+                </div>
+            </div>
+
+            <div class="tweet-text">${escapeHtml(tweet.text || '')}</div>
+
+            <div class="tweet-metrics">
+                <span>${tweet.like_count || 0} likes</span>
+                <span>${tweet.retweet_count || 0} RTs</span>
+                <span>${tweet.reply_count || 0} replies</span>
+                ${tweet.is_retweet ? '<span>[RT]</span>' : ''}
+                ${tweet.is_quote ? '<span>[QT]</span>' : ''}
+            </div>
+
+            ${tweet.responses && tweet.responses.length > 0 ? renderResponses(tweet.responses) : ''}
+
+            <div class="mode-decisions">
+                ${Object.entries(tweet.mode_decisions || {}).map(([mode, status]) =>
+                    `<div class="mode-decision">
+                        <span>${mode}:</span>
+                        <span class="status-badge status-${status}">${status}</span>
+                    </div>`
+                ).join('')}
+            </div>
+
+            <div class="label-buttons">
+                <button class="label-btn show ${humanLabel === true ? 'active' : ''}"
+                        onclick="event.stopPropagation(); labelTweet('${tweet.id}', true)">
+                    Show
+                </button>
+                <button class="label-btn hide ${humanLabel === false ? 'active' : ''}"
+                        onclick="event.stopPropagation(); labelTweet('${tweet.id}', false)">
+                    Hide
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+// Render prompt responses
+function renderResponses(responses) {
+    const display = showResponses ? 'block' : 'none';
+    return `
+        <div class="responses" style="display: ${display}">
+            ${responses.map(r => `
+                <div class="response-item">
+                    <div class="response-header">
+                        <span>${r.prompt_id}</span>
+                        <span>${r.model}</span>
+                    </div>
+                    <div class="response-json">${escapeHtml(JSON.stringify(r.response, null, 2))}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+// Render pagination
+function renderPagination(total) {
+    const totalPages = Math.ceil(total / PAGE_SIZE);
+    if (totalPages <= 1) {
+        pagination.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+    if (currentPage > 0) {
+        html += `<button class="btn" onclick="goToPage(${currentPage - 1})">Prev</button>`;
+    }
+    html += `<span style="color: #666; padding: 0 10px;">Page ${currentPage + 1} of ${totalPages}</span>`;
+    if (currentPage < totalPages - 1) {
+        html += `<button class="btn" onclick="goToPage(${currentPage + 1})">Next</button>`;
+    }
+    pagination.innerHTML = html;
+}
+
+function goToPage(page) {
+    currentPage = page;
+    selectedIndex = -1;
+    loadTweets();
+}
+
+// Select a tweet
+function selectTweet(index) {
+    document.querySelectorAll('.tweet.selected').forEach(el => el.classList.remove('selected'));
+    selectedIndex = index;
+    const el = document.querySelector(`.tweet[data-index="${index}"]`);
+    if (el) {
+        el.classList.add('selected');
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+}
+
+// Label a tweet
+async function labelTweet(tweetId, shouldShow) {
+    try {
+        await fetch('/api/ui/label', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                tweet_id: tweetId,
+                mode_id: currentMode,
+                should_show: shouldShow
+            })
+        });
+
+        // Update local state
+        const tweet = tweets.find(t => t.id === tweetId);
+        if (tweet) {
+            tweet.human_label = shouldShow;
+            renderTweets();
+        }
+    } catch (err) {
+        console.error('Failed to label tweet:', err);
+    }
+}
+
+// Toggle responses visibility
+function toggleResponses() {
+    showResponses = !showResponses;
+    showResponsesSelect.value = showResponses ? 'expanded' : 'collapsed';
+    document.querySelectorAll('.responses').forEach(el => {
+        el.style.display = showResponses ? 'block' : 'none';
+    });
+}
+
+// Keyboard navigation
+document.addEventListener('keydown', (e) => {
+    // Ignore if typing in input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+    switch (e.key) {
+        case 'j':
+            if (selectedIndex < tweets.length - 1) selectTweet(selectedIndex + 1);
+            break;
+        case 'k':
+            if (selectedIndex > 0) selectTweet(selectedIndex - 1);
+            break;
+        case 'y':
+            if (selectedIndex >= 0) labelTweet(tweets[selectedIndex].id, true);
+            break;
+        case 'n':
+            if (selectedIndex >= 0) labelTweet(tweets[selectedIndex].id, false);
+            break;
+        case 'e':
+            toggleResponses();
+            break;
+    }
+});
+
+// Event listeners
+modeSelect.addEventListener('change', () => { currentPage = 0; loadTweets(); });
+statusFilter.addEventListener('change', () => { currentPage = 0; loadTweets(); });
+showResponsesSelect.addEventListener('change', (e) => {
+    showResponses = e.target.value === 'expanded';
+    document.querySelectorAll('.responses').forEach(el => {
+        el.style.display = showResponses ? 'block' : 'none';
+    });
+});
+
+let searchTimeout;
+searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(() => { currentPage = 0; loadTweets(); }, 300);
+});
+
+// Escape HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Initial load
+loadTweets();
+</script>
+{% endblock %}

@@ -6,11 +6,12 @@ A simple Flask server that receives tweets from the browser extension
 and stores them in SQLite for later classification.
 """
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from database import (
     init_database, store_tweets, get_stats, get_pending_tweets,
     get_approved_tweets, check_tweet_statuses, update_classification,
-    approve_all_pending, get_all_classified_ids, list_modes
+    approve_all_pending, get_all_classified_ids, list_modes,
+    add_human_label, get_human_labels, transaction, get_prompt_responses_batch,
 )
 from modes import decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes
 from classifier import setup_prompts_and_modes
@@ -163,6 +164,194 @@ def list_modes_endpoint():
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint."""
+    return jsonify({"status": "ok"})
+
+
+# =============================================================================
+# Web UI Routes
+# =============================================================================
+
+
+@app.route("/ui/label")
+def ui_label():
+    """Labeling interface for tweets."""
+    modes = get_available_modes()
+    return render_template("label.html", modes=modes, active_page="label")
+
+
+@app.route("/ui/read")
+def ui_read():
+    """Reading interface for approved tweets."""
+    modes = get_available_modes()
+    return render_template("read.html", modes=modes, active_page="read")
+
+
+@app.route("/api/ui/tweets", methods=["GET"])
+def api_ui_tweets():
+    """
+    Get tweets for the UI with mode-based status and responses.
+
+    Query params:
+    - mode: Mode ID for status calculation
+    - status: Filter by status (all, pending, approved, filtered, unlabeled)
+    - search: Search in author or text
+    - sort: Sort field (created_at, captured_at)
+    - limit: Number of tweets
+    - offset: Pagination offset
+    """
+    import json
+    from database import get_mode
+
+    mode_id = request.args.get("mode", "default")
+    status_filter = request.args.get("status", "all")
+    search = request.args.get("search", "")
+    sort_field = request.args.get("sort", "captured_at")
+    limit = request.args.get("limit", 20, type=int)
+    offset = request.args.get("offset", 0, type=int)
+
+    # Get mode config
+    mode_config = get_mode(mode_id)
+    prompt_id = mode_config["prompt_id"] if mode_config else "binary_filter_v1"
+
+    # Build query
+    with transaction() as conn:
+        # Base query - for status filtering, we need to join with prompt_responses
+        if status_filter in ("approved", "filtered", "pending"):
+            # Join with prompt_responses to filter by status
+            query = """
+                SELECT DISTINCT t.* FROM tweets t
+                LEFT JOIN prompt_responses pr ON t.id = pr.tweet_id AND pr.prompt_id = ?
+            """
+            params = [prompt_id]
+
+            if status_filter == "pending":
+                # No response yet
+                query = query.replace("LEFT JOIN", "LEFT JOIN")
+                conditions = ["pr.tweet_id IS NULL"]
+            else:
+                # Has response - filter by approved field in JSON
+                # For binary_filter prompts, check the 'approved' field
+                if status_filter == "approved":
+                    conditions = ["json_extract(pr.response_json, '$.approved') = 1"]
+                else:
+                    conditions = ["json_extract(pr.response_json, '$.approved') = 0"]
+        elif status_filter == "unlabeled":
+            query = """
+                SELECT t.* FROM tweets t
+                LEFT JOIN human_labels hl ON t.id = hl.tweet_id AND hl.mode_id = ?
+            """
+            params = [mode_id]
+            conditions = ["hl.tweet_id IS NULL"]
+        else:
+            query = "SELECT * FROM tweets t"
+            params = []
+            conditions = []
+
+        # Search filter
+        if search:
+            conditions.append("(t.author_username LIKE ? OR t.text LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        # Sort
+        if sort_field in ("created_at", "captured_at"):
+            query += f" ORDER BY t.{sort_field} DESC"
+        else:
+            query += " ORDER BY t.captured_at DESC"
+
+        # Get total count first
+        count_query = query.replace("SELECT DISTINCT t.*", "SELECT COUNT(DISTINCT t.id)", 1)
+        count_query = count_query.replace("SELECT t.*", "SELECT COUNT(DISTINCT t.id)", 1)
+        count_query = count_query.replace("SELECT *", "SELECT COUNT(*)", 1)
+        total = conn.execute(count_query, params).fetchone()[0]
+
+        # Add pagination
+        query += " LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = conn.execute(query, params).fetchall()
+        tweets = [dict(row) for row in rows]
+
+    if not tweets:
+        return jsonify({"tweets": [], "total": 0})
+
+    # Get mode decisions for all tweets
+    tweet_ids = [t["id"] for t in tweets]
+    try:
+        mode_statuses = decide_tweets_batch(tweet_ids, mode_id)
+    except KeyError:
+        mode_statuses = {}
+
+    # Get all mode decisions for display
+    all_modes = get_available_modes()
+    all_mode_decisions = {}
+    for mode in all_modes:
+        try:
+            decisions = decide_tweets_batch(tweet_ids, mode["id"])
+            for tid, status in decisions.items():
+                if tid not in all_mode_decisions:
+                    all_mode_decisions[tid] = {}
+                all_mode_decisions[tid][mode["id"]] = status
+        except Exception:
+            pass
+
+    # Get prompt responses
+    responses_by_tweet = {}
+    seen_prompts = set()
+    for mode in all_modes:
+        pid = mode.get("prompt_id")
+        if pid and pid not in seen_prompts:
+            seen_prompts.add(pid)
+            responses = get_prompt_responses_batch(tweet_ids, pid)
+            for tid, resp in responses.items():
+                if tid not in responses_by_tweet:
+                    responses_by_tweet[tid] = []
+                responses_by_tweet[tid].append({
+                    "prompt_id": pid,
+                    "model": resp.get("model"),
+                    "response": resp.get("response"),
+                })
+
+    # Get human labels
+    human_labels = {}
+    with transaction() as conn:
+        placeholders = ",".join("?" * len(tweet_ids))
+        rows = conn.execute(f"""
+            SELECT tweet_id, should_show FROM human_labels
+            WHERE tweet_id IN ({placeholders}) AND mode_id = ?
+        """, (*tweet_ids, mode_id)).fetchall()
+        for row in rows:
+            human_labels[row["tweet_id"]] = bool(row["should_show"])
+
+    # Enrich tweets
+    for tweet in tweets:
+        tid = tweet["id"]
+        tweet["mode_status"] = mode_statuses.get(tid, "pending")
+        tweet["mode_decisions"] = all_mode_decisions.get(tid, {})
+        tweet["responses"] = responses_by_tweet.get(tid, [])
+        tweet["human_label"] = human_labels.get(tid)
+
+    return jsonify({"tweets": tweets, "total": total})
+
+
+@app.route("/api/ui/label", methods=["POST"])
+def api_ui_label():
+    """Add a human label for a tweet."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Missing JSON body"}), 400
+
+    tweet_id = data.get("tweet_id")
+    mode_id = data.get("mode_id")
+    should_show = data.get("should_show")
+
+    if not tweet_id or not mode_id or should_show is None:
+        return jsonify({"error": "Missing required fields"}), 400
+
+    add_human_label(tweet_id, mode_id, should_show, data.get("notes"))
+
     return jsonify({"status": "ok"})
 
 

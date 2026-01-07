@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% block title %}Read - Aerie{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .read-tweet {
+        max-width: 600px;
+        margin: 0 auto 16px;
+    }
+
+    .read-tweet .tweet-text {
+        font-size: 1.1rem;
+        line-height: 1.6;
+    }
+
+    .reason-tooltip {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: #0d0d0d;
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: #888;
+        display: none;
+    }
+
+    .read-tweet:hover .reason-tooltip {
+        display: block;
+    }
+
+    .load-more {
+        text-align: center;
+        padding: 20px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="controls" style="max-width: 600px; margin: 0 auto 20px;">
+    <label>Mode:</label>
+    <select id="mode-select">
+        {% for mode in modes %}
+        <option value="{{ mode.id }}">{{ mode.name }}</option>
+        {% endfor %}
+    </select>
+
+    <label>Sort:</label>
+    <select id="sort-select">
+        <option value="created_at">Tweet date</option>
+        <option value="captured_at">Captured date</option>
+    </select>
+</div>
+
+<div id="tweets-container">
+    <div class="loading">Loading tweets...</div>
+</div>
+
+<div class="load-more" id="load-more" style="display: none;">
+    <button class="btn" onclick="loadMore()">Load more</button>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PAGE_SIZE = 30;
+let offset = 0;
+let hasMore = true;
+let loading = false;
+
+const container = document.getElementById('tweets-container');
+const modeSelect = document.getElementById('mode-select');
+const sortSelect = document.getElementById('sort-select');
+const loadMoreDiv = document.getElementById('load-more');
+
+async function loadTweets(append = false) {
+    if (loading) return;
+    loading = true;
+
+    if (!append) {
+        container.innerHTML = '<div class="loading">Loading tweets...</div>';
+        offset = 0;
+    }
+
+    try {
+        const params = new URLSearchParams({
+            mode: modeSelect.value,
+            status: 'approved',
+            sort: sortSelect.value,
+            limit: PAGE_SIZE,
+            offset: offset
+        });
+
+        const response = await fetch(`/api/ui/tweets?${params}`);
+        const data = await response.json();
+
+        if (!append) {
+            container.innerHTML = '';
+        }
+
+        if (data.tweets.length === 0 && !append) {
+            container.innerHTML = '<div class="loading">No approved tweets in this mode yet</div>';
+            loadMoreDiv.style.display = 'none';
+            return;
+        }
+
+        data.tweets.forEach(tweet => {
+            container.insertAdjacentHTML('beforeend', renderTweet(tweet));
+        });
+
+        hasMore = data.tweets.length === PAGE_SIZE;
+        loadMoreDiv.style.display = hasMore ? 'block' : 'none';
+        offset += data.tweets.length;
+
+    } catch (err) {
+        if (!append) {
+            container.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
+        }
+    } finally {
+        loading = false;
+    }
+}
+
+function loadMore() {
+    loadTweets(true);
+}
+
+function renderTweet(tweet) {
+    const response = tweet.responses?.[0];
+    const reason = response?.response?.reason || '';
+
+    return `
+        <div class="tweet read-tweet">
+            <div class="tweet-header">
+                <div>
+                    <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
+                    <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                </div>
+                <div class="tweet-meta">
+                    ${formatDate(tweet.created_at)}
+                </div>
+            </div>
+
+            <div class="tweet-text">${escapeHtml(tweet.text || '')}</div>
+
+            <div class="tweet-metrics">
+                <span>${tweet.like_count || 0} likes</span>
+                <span>${tweet.retweet_count || 0} RTs</span>
+                <span>${tweet.reply_count || 0} replies</span>
+            </div>
+
+            ${reason ? `<div class="reason-tooltip">Approved: ${escapeHtml(reason)}</div>` : ''}
+        </div>
+    `;
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    } catch {
+        return '';
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Infinite scroll
+window.addEventListener('scroll', () => {
+    if (!hasMore || loading) return;
+    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+        loadMore();
+    }
+});
+
+modeSelect.addEventListener('change', () => loadTweets());
+sortSelect.addEventListener('change', () => loadTweets());
+
+loadTweets();
+</script>
+{% endblock %}
