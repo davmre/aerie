@@ -460,6 +460,106 @@
                 document.getElementById('stats').textContent =
                     `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
             });
+
+        // =================================================================
+        // Shared utility functions for tweet rendering
+        // =================================================================
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            } catch {
+                return '';
+            }
+        }
+
+        function renderTextWithUrls(text, urls) {
+            if (!text) return '';
+            let result = escapeHtml(text);
+
+            // Parse URLs from the tweet's urls field if available
+            if (urls) {
+                try {
+                    const urlList = typeof urls === 'string' ? JSON.parse(urls) : urls;
+                    if (Array.isArray(urlList)) {
+                        for (const u of urlList) {
+                            const shortUrl = escapeHtml(u.url || '');
+                            const expandedUrl = u.expanded_url || u.url;
+                            const displayUrl = u.display_url || expandedUrl;
+                            if (shortUrl && expandedUrl) {
+                                result = result.replace(
+                                    shortUrl,
+                                    `<a href="${escapeHtml(expandedUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(displayUrl)}</a>`
+                                );
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to parse urls:', e);
+                }
+            }
+
+            // Also find any remaining URLs not in the urls list
+            result = result.replace(
+                /(https?:\/\/[^\s<]+)/g,
+                (match) => {
+                    // Don't double-wrap already-linked URLs
+                    if (result.indexOf(`href="${match}"`) !== -1) return match;
+                    return `<a href="${match}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${match}</a>`;
+                }
+            );
+
+            return result;
+        }
+
+        function renderQuotedTweet(qt) {
+            if (!qt) return '';
+            const qtUrl = qt.author_username
+                ? `https://twitter.com/${qt.author_username}/status/${qt.id}`
+                : `https://twitter.com/i/status/${qt.id}`;
+            return `
+                <div class="quoted-tweet" onclick="event.stopPropagation()">
+                    <div class="quoted-tweet-header">
+                        <span class="tweet-author">${escapeHtml(qt.author_display_name || qt.author_username || 'Unknown')}</span>
+                        <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
+                        <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+                    </div>
+                    <div class="quoted-tweet-text">${escapeHtml(qt.text || '')}</div>
+                </div>
+            `;
+        }
+
+        function renderThreadContext(ancestors) {
+            if (!ancestors || ancestors.length === 0) return '';
+            return `
+                <div class="thread-context" onclick="event.stopPropagation()">
+                    <div class="thread-label">🧵 Thread context (${ancestors.length} earlier ${ancestors.length === 1 ? 'post' : 'posts'})</div>
+                    ${ancestors.map(a => {
+                        const url = a.author_username
+                            ? `https://twitter.com/${a.author_username}/status/${a.id}`
+                            : `https://twitter.com/i/status/${a.id}`;
+                        return `
+                            <div class="thread-ancestor">
+                                <div class="thread-ancestor-header">
+                                    <span class="tweet-author">${escapeHtml(a.author_display_name || a.author_username || 'Unknown')}</span>
+                                    <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
+                                    <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+                                </div>
+                                <div class="thread-ancestor-text">${escapeHtml(a.text || '')}</div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
     </script>
     {% block extra_scripts %}{% endblock %}
 </body>
