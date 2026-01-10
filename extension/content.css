@@ -1,9 +1,14 @@
 /* Aerie: Visual treatment for unapproved tweets */
-/* Using grayscale + opacity (much faster than blur) */
+/* Opacity values are controlled via CSS custom properties set by content.js */
 
-/* Pending/unknown tweets: essentially invisible but technically "visible" to browser */
+:root {
+  --aerie-pending-opacity: 0.02;
+  --aerie-filtered-opacity: 0.02;
+}
+
+/* Pending/unknown tweets: controlled by settings */
 article[data-testid="tweet"] {
-  opacity: 0.02 !important;
+  opacity: var(--aerie-pending-opacity) !important;
 }
 
 /* Approved tweets: full color, full opacity */
@@ -13,8 +18,8 @@ article[data-testid="tweet"][data-aerie-status="approved"] {
   opacity: 1 !important;
 }
 
-/* Filtered tweets: essentially invisible */
+/* Filtered tweets: controlled by settings */
 article[data-testid="tweet"].aerie-filtered,
 article[data-testid="tweet"][data-aerie-status="filtered"] {
-  opacity: 0.02 !important;
+  opacity: var(--aerie-filtered-opacity) !important;
 }

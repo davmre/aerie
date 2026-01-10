@@ -1,8 +1,20 @@
 // Aerie Content Script
 // Hides unapproved tweets and reveals them as they get classified
 
-const BACKEND_URL = "http://localhost:8080";
-const POLL_INTERVAL_MS = 3000; // Check for newly approved tweets every 3 seconds
+// Default settings
+const DEFAULTS = {
+  backendUrl: "http://localhost:8080",
+  mode: "default",
+  pollInterval: 3000,
+  pendingOpacity: 0.02,
+  filteredOpacity: 0.02
+};
+
+// Current settings (loaded from storage)
+let settings = { ...DEFAULTS };
+
+// Poll interval handle (for restarting on settings change)
+let pollIntervalId = null;
 
 // Track tweets we're monitoring (id -> element)
 const pendingTweets = new Map();
@@ -10,13 +22,50 @@ const pendingTweets = new Map();
 // Cache of known statuses to avoid repeated backend calls
 const statusCache = new Map(); // id -> 'approved' | 'pending' | 'filtered'
 
-// Mode for classification (matches server-side mode definitions)
-const DEFAULT_MODE = "default";
+// Apply CSS custom properties for opacity settings
+function applyOpacitySettings() {
+  document.documentElement.style.setProperty('--aerie-pending-opacity', settings.pendingOpacity);
+  document.documentElement.style.setProperty('--aerie-filtered-opacity', settings.filteredOpacity);
+}
+
+// Load settings from storage
+async function loadSettings() {
+  try {
+    settings = await browser.storage.local.get(DEFAULTS);
+    applyOpacitySettings();
+    console.log('[Aerie] Settings loaded:', settings.backendUrl, 'mode:', settings.mode);
+  } catch (err) {
+    console.warn('[Aerie] Could not load settings, using defaults:', err.message);
+  }
+}
+
+// Listen for settings changes
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") {
+    for (const [key, { newValue }] of Object.entries(changes)) {
+      if (key in settings) {
+        settings[key] = newValue;
+      }
+    }
+
+    // Apply opacity changes immediately
+    applyOpacitySettings();
+
+    // Restart poll interval if it changed
+    if (changes.pollInterval && pollIntervalId) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = setInterval(pollForUpdates, settings.pollInterval);
+      console.log('[Aerie] Poll interval updated to', settings.pollInterval, 'ms');
+    }
+
+    console.log('[Aerie] Settings updated');
+  }
+});
 
 // Pre-load cache with all classified tweets on init
 async function preloadCache() {
   try {
-    const response = await fetch(`${BACKEND_URL}/tweets/classified-ids?mode=${DEFAULT_MODE}`);
+    const response = await fetch(`${settings.backendUrl}/tweets/classified-ids?mode=${settings.mode}`);
     if (response.ok) {
       const classified = await response.json();
       for (const [id, status] of Object.entries(classified)) {
@@ -48,10 +97,10 @@ async function checkTweetStatuses(tweetIds) {
   if (tweetIds.length === 0) return {};
 
   try {
-    const response = await fetch(`${BACKEND_URL}/tweets/check`, {
+    const response = await fetch(`${settings.backendUrl}/tweets/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: tweetIds, mode: DEFAULT_MODE })
+      body: JSON.stringify({ ids: tweetIds, mode: settings.mode })
     });
 
     if (!response.ok) {
@@ -266,6 +315,9 @@ function setupMutationObserver() {
 async function init() {
   console.log('[Aerie] Content script loaded');
 
+  // Load settings first
+  await loadSettings();
+
   // Pre-load cache with classified tweets (reduces network requests)
   await preloadCache();
 
@@ -280,7 +332,7 @@ async function init() {
   setupMutationObserver();
 
   // Poll for updates on pending tweets
-  setInterval(pollForUpdates, POLL_INTERVAL_MS);
+  pollIntervalId = setInterval(pollForUpdates, settings.pollInterval);
 }
 
 // Run when DOM is ready

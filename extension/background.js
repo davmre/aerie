@@ -1,7 +1,38 @@
 // Aerie Tweet Collector - Background Script
 // Intercepts Twitter API responses using webRequest API (invisible to page JavaScript)
 
-const COLLECTOR_URL = "http://localhost:8080/tweets";
+// Default settings
+const DEFAULTS = {
+  backendUrl: "http://localhost:8080",
+  mode: "default",
+  pollInterval: 3000,
+  pendingOpacity: 0.02,
+  filteredOpacity: 0.02
+};
+
+// Current settings (loaded from storage)
+let settings = { ...DEFAULTS };
+
+// Load settings on startup
+async function loadSettings() {
+  settings = await browser.storage.local.get(DEFAULTS);
+  console.log("[Aerie] Settings loaded:", settings.backendUrl);
+}
+
+// Listen for settings changes
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") {
+    for (const [key, { newValue }] of Object.entries(changes)) {
+      if (key in settings) {
+        settings[key] = newValue;
+      }
+    }
+    console.log("[Aerie] Settings updated:", settings.backendUrl);
+  }
+});
+
+// Initialize settings
+loadSettings();
 
 // Twitter API endpoints that contain timeline/tweet data
 const TIMELINE_PATTERNS = [
@@ -284,7 +315,8 @@ function extractUrls(entities) {
 // Send extracted tweets and retweets to local collector service
 async function sendToCollector(tweets, retweets = []) {
   try {
-    const response = await fetch(COLLECTOR_URL, {
+    const collectorUrl = `${settings.backendUrl}/tweets`;
+    const response = await fetch(collectorUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
