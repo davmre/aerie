@@ -105,8 +105,9 @@ The collector service includes web interfaces:
 
 - `/ui/label` - Labeling interface for creating ground truth data
 - `/ui/read` - Clean reading view for approved tweets
+- `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
 
-Both UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution).
+Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics.
 
 ## Design Principle: Context Symmetry
 
@@ -153,13 +154,23 @@ If a human needs to click through to understand a tweet, an LLM would benefit fr
 **modes** - Viewing mode definitions
 - `id` - Mode ID (e.g., "default", "ml_focus", "dharma")
 - `prompt_id` - Which prompt to use
-- `prefilter` - Optional prefilter function (short-circuits LLM)
-- `extractor` - Function to extract decision from response
+- `prefilter` - Optional prefilter function name (short-circuits LLM)
+- `extractor` - Extractor function name to extract decision from response
+- `extractor_config` - JSON config for parameterized extractors
+- `prefilter_config` - JSON config for parameterized prefilters
 
 **human_labels** - Ground truth for evaluation
 - `tweet_id`, `mode_id` - Composite primary key
 - `should_show` - 1 = show, 0 = hide
 - `notes` - Optional annotation
+
+**mode_decisions** - Cached mode decisions for fast lookups
+- `tweet_id`, `mode_id` - Composite primary key
+- `decision` - 'approved' or 'filtered'
+- `source` - 'prefilter' or 'extractor' (how decision was made)
+- `computed_at` - When this decision was computed
+
+This table caches the final show/hide decision for each tweet in each mode. It enables O(1) lookups for stats and fast SQL queries for the Read page, avoiding the need to recompute decisions on every page load.
 
 ### Retweet Handling
 
@@ -195,11 +206,17 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/tweets/check` | POST | Check approval status of tweet IDs (mode defaults to "default") |
 | `/tweets/classified-ids` | GET | Get all classified IDs (mode defaults to "default") |
 | `/modes` | GET | List available filtering modes |
-| `/stats` | GET | Database statistics |
+| `/stats` | GET | Database statistics (accepts `?mode=` for mode-specific stats) |
 | `/api/ui/tweets` | GET | Get tweets for web UI with full context |
 | `/api/ui/label` | POST | Add human label for a tweet |
+| `/api/modes` | GET/POST | List modes or create new mode |
+| `/api/modes/<id>` | GET/PUT/DELETE | Get, update, or delete a mode |
+| `/api/extractors` | GET | List available extractors with config schemas |
+| `/api/prefilters` | GET | List available prefilters with config schemas |
+| `/api/prompts` | GET | List available prompts |
 | `/ui/label` | GET | Web UI for labeling tweets |
 | `/ui/read` | GET | Web UI for reading approved tweets |
+| `/ui/modes` | GET | Web UI for managing classification modes |
 
 ## Running the Project
 
@@ -240,6 +257,10 @@ python classifier.py classify --max 20 --model claude-3-haiku-20240307
 # List available prompts
 python classifier.py prompts
 
+# Recompute cached decisions for all modes
+# (run after schema migration or to refresh cache)
+python classifier.py recompute-decisions
+
 # List available modes
 python classifier.py modes
 
@@ -258,12 +279,25 @@ python classifier.py create-mode ml_focus \
 
 ### Creating Custom Modes
 
-Modes combine a prompt with extractor and optional prefilter functions:
+Modes can be created via the web UI at `/ui/modes` or via the CLI. They combine a prompt with an extractor and optional prefilter.
+
+**Simple vs Factory Functions**
+
+Extractors and prefilters come in two types:
+- **Simple**: No configuration (e.g., `default`, `approve_all`)
+- **Factory**: Accept configuration parameters (e.g., `topic_contains` takes a topic string, `make_author_filter` takes whitelist/blacklist arrays)
+
+The web UI dynamically renders config fields based on each function's schema.
+
+**Adding Custom Functions**
 
 ```python
 # extractors.py - add custom extractors
 def my_custom_extractor(response: dict) -> bool:
     return "ml" in response.get("topics", []) and response.get("scores", {}).get("toxicity", 1) < 0.2
+
+# Register in EXTRACTOR_SCHEMAS for web UI visibility
+EXTRACTOR_SCHEMAS["my_custom"] = {"type": "simple", "description": "My custom filter"}
 
 # prefilters.py - add custom prefilters
 def my_whitelist(tweet: dict) -> bool | None:

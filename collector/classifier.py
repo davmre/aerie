@@ -26,6 +26,7 @@ from database import (
     store_prompt_response,
     init_database,
 )
+from modes import compute_all_mode_decisions
 
 
 # =============================================================================
@@ -309,6 +310,15 @@ def run_classification(
     print(f"  Successful: {success_count}")
     print(f"  Errors: {error_count}")
 
+    # Update cached mode decisions
+    if not dry_run and success_count > 0:
+        print()
+        print("Updating mode decision cache...")
+        decision_results = compute_all_mode_decisions(model, db_path)
+        for mode_id, result in decision_results.items():
+            if result["computed"] > 0:
+                print(f"  {mode_id}: {result['computed']} decisions computed")
+
 
 def setup_prompts_and_modes(db_path: Path = DEFAULT_DB_PATH):
     """Initialize database with built-in prompts and default mode."""
@@ -403,6 +413,40 @@ def cmd_create_mode(args):
     print(f"Created mode: {args.id}")
 
 
+def cmd_recompute_decisions(args):
+    """Recompute cached decisions for all modes."""
+    setup_prompts_and_modes(args.db)
+
+    modes = list_modes(args.db)
+    if not modes:
+        print("No modes found.")
+        return
+
+    print(f"Recomputing decisions for {len(modes)} modes...")
+    print()
+
+    from modes import compute_mode_decisions
+    from database import invalidate_mode_decisions
+
+    for mode in modes:
+        mode_id = mode["id"]
+        print(f"  {mode_id}:")
+
+        # Invalidate existing decisions
+        deleted = invalidate_mode_decisions(mode_id, args.db)
+        if deleted > 0:
+            print(f"    Invalidated {deleted} existing decisions")
+
+        # Compute new decisions
+        result = compute_mode_decisions(mode_id, db_path=args.db)
+        print(f"    Computed: {result['computed']} decisions")
+        if result["pending"] > 0:
+            print(f"    Pending (need LLM): {result['pending']}")
+        print()
+
+    print("Done!")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Aerie Tweet Classifier",
@@ -482,6 +526,13 @@ def main():
     create_mode_parser.add_argument("--name", help="Display name")
     create_mode_parser.add_argument("--description", help="Mode description")
     create_mode_parser.set_defaults(func=cmd_create_mode)
+
+    # recompute-decisions command
+    recompute_parser = subparsers.add_parser(
+        "recompute-decisions",
+        help="Recompute cached mode decisions (run after schema migration)",
+    )
+    recompute_parser.set_defaults(func=cmd_recompute_decisions)
 
     args = parser.parse_args()
 

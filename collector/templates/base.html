@@ -59,12 +59,6 @@
             color: #e0e0e0;
         }
 
-        .stats {
-            float: right;
-            color: #666;
-            font-size: 0.9rem;
-        }
-
         /* Tweet card styles */
         .tweet {
             background: #161616;
@@ -445,21 +439,22 @@
             <nav>
                 <a href="/ui/label" class="{% if active_page == 'label' %}active{% endif %}">Label</a>
                 <a href="/ui/read" class="{% if active_page == 'read' %}active{% endif %}">Read</a>
+                <a href="/ui/modes" class="{% if active_page == 'modes' %}active{% endif %}">Modes</a>
             </nav>
-            <div class="stats" id="stats"></div>
         </header>
 
         {% block content %}{% endblock %}
     </div>
 
     <script>
-        // Fetch and display stats
-        fetch('/stats')
-            .then(r => r.json())
-            .then(stats => {
-                document.getElementById('stats').textContent =
-                    `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
-            });
+        // Stats management - can be called by child templates
+        // Returns a promise that resolves with the stats object
+        function fetchStats(mode) {
+            const url = mode ? `/stats?mode=${encodeURIComponent(mode)}` : '/stats';
+            return fetch(url)
+                .then(r => r.json())
+                .catch(() => ({ error: 'Failed to fetch stats' }));
+        }
 
         // =================================================================
         // Shared utility functions for tweet rendering

@@ -126,6 +126,64 @@ EXTRACTORS = {
     "chill_vibes": chill_vibes,
 }
 
+# Schema definitions for each extractor
+# "simple" extractors have no config, "factory" extractors accept parameters
+EXTRACTOR_SCHEMAS = {
+    "default": {
+        "type": "simple",
+        "description": "Default extractor - looks for 'approved' field in response",
+    },
+    "binary_approved": {
+        "type": "simple",
+        "description": "Simple binary approval check (same as default)",
+    },
+    "topic_ml": {
+        "type": "simple",
+        "description": "Show ML/AI related content (ml, machine_learning, ai, deep_learning, neural_networks)",
+    },
+    "topic_spirituality": {
+        "type": "simple",
+        "description": "Show spirituality/dharma content (spirituality, dharma, meditation, buddhism, philosophy)",
+    },
+    "topic_tech": {
+        "type": "simple",
+        "description": "Show general tech content (tech, programming, software, engineering, startups, ml, ai)",
+    },
+    "high_quality": {
+        "type": "simple",
+        "description": "Show only high-quality content (toxicity < 0.2, engagement_bait < 0.3, informativeness > 0.4)",
+    },
+    "chill_vibes": {
+        "type": "simple",
+        "description": "Show only chill, positive content (toxicity < 0.1, engagement_bait < 0.2, positivity > 0.5)",
+    },
+    "topic_contains": {
+        "type": "factory",
+        "description": "Show tweets containing a specific topic",
+        "params": {
+            "topic": {
+                "type": "string",
+                "required": True,
+                "description": "Topic to match (e.g., 'ml', 'tech', 'python')",
+            },
+        },
+    },
+    "low_toxicity": {
+        "type": "factory",
+        "description": "Show content below a toxicity threshold",
+        "params": {
+            "threshold": {
+                "type": "number",
+                "required": False,
+                "default": 0.3,
+                "min": 0,
+                "max": 1,
+                "description": "Maximum toxicity score (0-1)",
+            },
+        },
+    },
+}
+
 
 def get_extractor(name: str):
     """
@@ -137,6 +195,36 @@ def get_extractor(name: str):
     return EXTRACTORS[name]
 
 
-def register_extractor(name: str, func):
-    """Register a custom extractor function."""
+def get_extractor_with_config(name: str, config: dict | None = None):
+    """
+    Get an extractor function, applying config for factory-type extractors.
+    For simple extractors, config is ignored.
+    For factory extractors, config params are passed to the factory function.
+    """
+    schema = EXTRACTOR_SCHEMAS.get(name, {})
+
+    if schema.get("type") == "factory":
+        config = config or {}
+        if name == "topic_contains":
+            topic = config.get("topic", "")
+            return topic_contains(topic)
+        elif name == "low_toxicity":
+            threshold = config.get("threshold", 0.3)
+            return low_toxicity(threshold)
+        else:
+            raise KeyError(f"Factory extractor '{name}' not implemented in get_extractor_with_config")
+
+    # Simple extractor - just look it up
+    return get_extractor(name)
+
+
+def list_extractor_schemas() -> list[dict]:
+    """Return all extractor schemas for the API."""
+    return [{"name": name, **schema} for name, schema in EXTRACTOR_SCHEMAS.items()]
+
+
+def register_extractor(name: str, func, schema: dict | None = None):
+    """Register a custom extractor function with optional schema."""
     EXTRACTORS[name] = func
+    if schema:
+        EXTRACTOR_SCHEMAS[name] = schema

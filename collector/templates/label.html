@@ -2,6 +2,18 @@
 
 {% block title %}Label Tweets - Aerie{% endblock %}
 
+{% block extra_styles %}
+<style>
+.mode-stats {
+    color: #666;
+    font-size: 0.9rem;
+    margin-bottom: 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid #2a2a2a;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="controls">
     <label>Mode:</label>
@@ -28,6 +40,8 @@
 
     <input type="text" id="search" placeholder="Search author or text..." style="flex: 1; min-width: 150px;">
 </div>
+
+<div class="mode-stats" id="mode-stats"></div>
 
 <div id="tweets-container">
     <div class="loading">Loading tweets...</div>
@@ -58,6 +72,17 @@ const statusFilter = document.getElementById('status-filter');
 const showResponsesSelect = document.getElementById('show-responses');
 const searchInput = document.getElementById('search');
 const pagination = document.getElementById('pagination');
+const statsDiv = document.getElementById('mode-stats');
+
+// Update stats display for current mode
+async function updateStats(mode) {
+    const stats = await fetchStats(mode);
+    if (stats.error) {
+        statsDiv.textContent = '';
+        return;
+    }
+    statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+}
 
 // Load tweets
 async function loadTweets() {
@@ -282,7 +307,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // Event listeners
-modeSelect.addEventListener('change', () => { currentPage = 0; loadTweets(); });
+modeSelect.addEventListener('change', () => { currentPage = 0; loadTweets(); updateStats(modeSelect.value); });
 statusFilter.addEventListener('change', () => { currentPage = 0; loadTweets(); });
 showResponsesSelect.addEventListener('change', (e) => {
     showResponses = e.target.value === 'expanded';
@@ -299,5 +324,6 @@ searchInput.addEventListener('input', () => {
 
 // Initial load
 loadTweets();
+updateStats(modeSelect.value);
 </script>
 {% endblock %}

@@ -32,6 +32,15 @@
         text-align: center;
         padding: 20px;
     }
+
+    .mode-stats {
+        max-width: 600px;
+        margin: 0 auto 16px;
+        color: #666;
+        font-size: 0.9rem;
+        padding: 8px 0;
+        border-bottom: 1px solid #2a2a2a;
+    }
 </style>
 {% endblock %}
 
@@ -50,6 +59,8 @@
         <option value="captured_at">Captured date</option>
     </select>
 </div>
+
+<div class="mode-stats" id="mode-stats"></div>
 
 <div id="tweets-container">
     <div class="loading">Loading tweets...</div>
@@ -71,6 +82,17 @@ const container = document.getElementById('tweets-container');
 const modeSelect = document.getElementById('mode-select');
 const sortSelect = document.getElementById('sort-select');
 const loadMoreDiv = document.getElementById('load-more');
+const statsDiv = document.getElementById('mode-stats');
+
+// Update stats display for current mode
+async function updateStats(mode) {
+    const stats = await fetchStats(mode);
+    if (stats.error) {
+        statsDiv.textContent = '';
+        return;
+    }
+    statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+}
 
 async function loadTweets(append = false) {
     if (loading) return;
@@ -174,9 +196,11 @@ window.addEventListener('scroll', () => {
     }
 });
 
-modeSelect.addEventListener('change', () => loadTweets());
+modeSelect.addEventListener('change', () => { loadTweets(); updateStats(modeSelect.value); });
 sortSelect.addEventListener('change', () => loadTweets());
 
+// Initial load
 loadTweets();
+updateStats(modeSelect.value);
 </script>
 {% endblock %}

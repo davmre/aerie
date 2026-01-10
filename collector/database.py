@@ -33,6 +33,31 @@ def transaction(db_path: Path = DEFAULT_DB_PATH):
         conn.close()
 
 
+def parse_twitter_date(date_str: str | None) -> str | None:
+    """
+    Convert Twitter's date format to ISO format for proper sorting.
+
+    Twitter format: "Wed Sep 10 14:24:00 +0000 2025"
+    ISO format: "2025-09-10T14:24:00+00:00"
+
+    Returns None if input is None/empty, passes through if already ISO format.
+    """
+    if not date_str:
+        return None
+
+    # Already in ISO format (starts with year)
+    if date_str[:4].isdigit():
+        return date_str
+
+    try:
+        # Twitter format: "Wed Sep 10 14:24:00 +0000 2025"
+        dt = datetime.strptime(date_str, "%a %b %d %H:%M:%S %z %Y")
+        return dt.isoformat()
+    except ValueError:
+        # If parsing fails, return as-is
+        return date_str
+
+
 def init_database(db_path: Path = DEFAULT_DB_PATH):
     """Initialize the database schema."""
     with transaction(db_path) as conn:
@@ -158,6 +183,24 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_retweets_original ON retweets(original_tweet_id);
             CREATE INDEX IF NOT EXISTS idx_prompt_responses_prompt ON prompt_responses(prompt_id);
             CREATE INDEX IF NOT EXISTS idx_human_labels_mode ON human_labels(mode_id);
+
+            -- Cached mode decisions for fast lookups
+            -- Stores computed show/hide decisions per tweet per mode
+            CREATE TABLE IF NOT EXISTS mode_decisions (
+                tweet_id TEXT NOT NULL,
+                mode_id TEXT NOT NULL,
+                decision TEXT NOT NULL CHECK (decision IN ('approved', 'filtered')),
+                source TEXT NOT NULL CHECK (source IN ('prefilter', 'extractor')),
+                computed_at TEXT NOT NULL,
+                PRIMARY KEY (tweet_id, mode_id),
+                FOREIGN KEY (tweet_id) REFERENCES tweets(id),
+                FOREIGN KEY (mode_id) REFERENCES modes(id)
+            );
+
+            -- Indexes for efficient mode-based queries
+            CREATE INDEX IF NOT EXISTS idx_mode_decisions_mode ON mode_decisions(mode_id);
+            CREATE INDEX IF NOT EXISTS idx_mode_decisions_mode_decision
+                ON mode_decisions(mode_id, decision);
         """)
 
         # Migration: Add new author columns if they don't exist
@@ -174,6 +217,18 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
                 conn.execute(f"ALTER TABLE tweets ADD COLUMN {col_name} {col_type}")
+
+        # Migration: Add config columns to modes table if they don't exist
+        cursor = conn.execute("PRAGMA table_info(modes)")
+        existing_mode_columns = {row[1] for row in cursor.fetchall()}
+
+        mode_new_columns = [
+            ("extractor_config", "TEXT"),
+            ("prefilter_config", "TEXT"),
+        ]
+        for col_name, col_type in mode_new_columns:
+            if col_name not in existing_mode_columns:
+                conn.execute(f"ALTER TABLE modes ADD COLUMN {col_name} {col_type}")
 
 
 def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
@@ -215,7 +270,7 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                     (
                         tweet["id"],
                         text,
-                        tweet.get("created_at"),
+                        parse_twitter_date(tweet.get("created_at")),
                         tweet.get("captured_at", datetime.utcnow().isoformat()),
                         author.get("id"),
                         author.get("username"),
@@ -288,7 +343,7 @@ def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dic
                         rt.get("retweeter_user_id"),
                         rt["retweeter_username"],
                         rt.get("retweeter_display_name"),
-                        rt.get("retweeted_at"),
+                        parse_twitter_date(rt.get("retweeted_at")),
                         rt.get("captured_at", datetime.utcnow().isoformat()),
                     ),
                 )
@@ -417,6 +472,8 @@ def create_mode(
     prompt_id: str,
     extractor: str,
     prefilter: str | None = None,
+    extractor_config: dict | None = None,
+    prefilter_config: dict | None = None,
     description: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
@@ -424,10 +481,20 @@ def create_mode(
     with transaction(db_path) as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO modes (id, name, prompt_id, prefilter, extractor, description)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO modes
+            (id, name, prompt_id, prefilter, extractor, extractor_config, prefilter_config, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (mode_id, name, prompt_id, prefilter, extractor, description),
+            (
+                mode_id,
+                name,
+                prompt_id,
+                prefilter,
+                extractor,
+                json.dumps(extractor_config) if extractor_config else None,
+                json.dumps(prefilter_config) if prefilter_config else None,
+                description,
+            ),
         )
 
 
@@ -445,6 +512,109 @@ def list_modes(db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
     with transaction(db_path) as conn:
         rows = conn.execute("SELECT * FROM modes ORDER BY name").fetchall()
         return [dict(row) for row in rows]
+
+
+def update_mode(
+    mode_id: str,
+    name: str | None = None,
+    prompt_id: str | None = None,
+    extractor: str | None = None,
+    prefilter: str | None = None,
+    extractor_config: dict | None = None,
+    prefilter_config: dict | None = None,
+    description: str | None = None,
+    clear_prefilter: bool = False,
+    clear_extractor_config: bool = False,
+    clear_prefilter_config: bool = False,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> bool:
+    """
+    Update an existing mode. Only updates non-None fields.
+    Use clear_* flags to explicitly set fields to NULL.
+    Returns True if mode was found and updated, False otherwise.
+    """
+    with transaction(db_path) as conn:
+        # Check mode exists
+        existing = conn.execute(
+            "SELECT id FROM modes WHERE id = ?", (mode_id,)
+        ).fetchone()
+        if not existing:
+            return False
+
+        updates = []
+        params = []
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if prompt_id is not None:
+            updates.append("prompt_id = ?")
+            params.append(prompt_id)
+        if extractor is not None:
+            updates.append("extractor = ?")
+            params.append(extractor)
+        if prefilter is not None or clear_prefilter:
+            updates.append("prefilter = ?")
+            params.append(prefilter)
+        if extractor_config is not None or clear_extractor_config:
+            updates.append("extractor_config = ?")
+            params.append(json.dumps(extractor_config) if extractor_config else None)
+        if prefilter_config is not None or clear_prefilter_config:
+            updates.append("prefilter_config = ?")
+            params.append(json.dumps(prefilter_config) if prefilter_config else None)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+
+        if not updates:
+            return True  # Nothing to update
+
+        params.append(mode_id)
+        conn.execute(
+            f"UPDATE modes SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        return True
+
+
+def delete_mode(mode_id: str, force: bool = False, db_path: Path = DEFAULT_DB_PATH) -> dict:
+    """
+    Delete a mode.
+    Returns {"status": "ok"} on success.
+    Returns {"error": "...", "label_count": N} if mode has human labels and force=False.
+    If force=True, also deletes associated human_labels.
+    """
+    with transaction(db_path) as conn:
+        # Check for human labels
+        label_count = conn.execute(
+            "SELECT COUNT(*) FROM human_labels WHERE mode_id = ?", (mode_id,)
+        ).fetchone()[0]
+
+        if label_count > 0 and not force:
+            return {
+                "error": f"Mode has {label_count} human labels. Use force=True to delete.",
+                "label_count": label_count,
+            }
+
+        # Delete labels if forcing
+        if label_count > 0:
+            conn.execute("DELETE FROM human_labels WHERE mode_id = ?", (mode_id,))
+
+        # Delete the mode
+        result = conn.execute("DELETE FROM modes WHERE id = ?", (mode_id,))
+        if result.rowcount == 0:
+            return {"error": "Mode not found"}
+
+        return {"status": "ok", "deleted_labels": label_count if force else 0}
+
+
+def get_mode_label_counts(db_path: Path = DEFAULT_DB_PATH) -> dict[str, int]:
+    """Get human label counts for all modes."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            "SELECT mode_id, COUNT(*) as count FROM human_labels GROUP BY mode_id"
+        ).fetchall()
+        return {row["mode_id"]: row["count"] for row in rows}
 
 
 # =============================================================================
@@ -671,6 +841,183 @@ def get_unlabeled_tweets(
             (mode_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+# =============================================================================
+# Mode Decisions Cache
+# =============================================================================
+
+
+def store_mode_decision(
+    tweet_id: str,
+    mode_id: str,
+    decision: str,
+    source: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    """Store a cached decision for a tweet/mode pair."""
+    with transaction(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO mode_decisions
+            (tweet_id, mode_id, decision, source, computed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (tweet_id, mode_id, decision, source, datetime.utcnow().isoformat()),
+        )
+
+
+def store_mode_decisions_batch(
+    decisions: list[dict],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Store multiple decisions at once.
+    Each dict should have: tweet_id, mode_id, decision, source
+    Returns the number of decisions stored.
+    """
+    if not decisions:
+        return 0
+
+    with transaction(db_path) as conn:
+        now = datetime.utcnow().isoformat()
+        conn.executemany(
+            """
+            INSERT OR REPLACE INTO mode_decisions
+            (tweet_id, mode_id, decision, source, computed_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (d["tweet_id"], d["mode_id"], d["decision"], d["source"], now)
+                for d in decisions
+            ],
+        )
+        return len(decisions)
+
+
+def get_mode_decision(
+    tweet_id: str,
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> str | None:
+    """Get cached decision for a tweet/mode pair. Returns 'approved', 'filtered', or None."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT decision FROM mode_decisions WHERE tweet_id = ? AND mode_id = ?",
+            (tweet_id, mode_id),
+        ).fetchone()
+        return row["decision"] if row else None
+
+
+def get_mode_decisions_batch(
+    tweet_ids: list[str],
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, str]:
+    """Get cached decisions for multiple tweets. Returns dict of tweet_id -> decision."""
+    if not tweet_ids:
+        return {}
+
+    with transaction(db_path) as conn:
+        placeholders = ",".join("?" * len(tweet_ids))
+        rows = conn.execute(
+            f"""
+            SELECT tweet_id, decision FROM mode_decisions
+            WHERE tweet_id IN ({placeholders}) AND mode_id = ?
+            """,
+            (*tweet_ids, mode_id),
+        ).fetchall()
+        return {row["tweet_id"]: row["decision"] for row in rows}
+
+
+def get_cached_decision_stats(
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict:
+    """Get stats from cached decisions for a mode."""
+    with transaction(db_path) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
+
+        approved = conn.execute(
+            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ? AND decision = 'approved'",
+            (mode_id,),
+        ).fetchone()[0]
+
+        filtered = conn.execute(
+            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ? AND decision = 'filtered'",
+            (mode_id,),
+        ).fetchone()[0]
+
+        pending = total - approved - filtered
+
+        return {
+            "total": total,
+            "approved": approved,
+            "filtered": filtered,
+            "pending": pending,
+        }
+
+
+def invalidate_mode_decisions(
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Delete all cached decisions for a mode.
+    Call this when mode config changes.
+    Returns the number of decisions deleted.
+    """
+    with transaction(db_path) as conn:
+        result = conn.execute(
+            "DELETE FROM mode_decisions WHERE mode_id = ?",
+            (mode_id,),
+        )
+        return result.rowcount
+
+
+def invalidate_tweet_decisions(
+    tweet_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Delete all cached decisions for a tweet.
+    Call this when a tweet is reclassified.
+    Returns the number of decisions deleted.
+    """
+    with transaction(db_path) as conn:
+        result = conn.execute(
+            "DELETE FROM mode_decisions WHERE tweet_id = ?",
+            (tweet_id,),
+        )
+        return result.rowcount
+
+
+def get_tweets_without_decision(
+    mode_id: str,
+    limit: int = 1000,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """Get tweets that don't have a cached decision for the given mode."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT t.* FROM tweets t
+            LEFT JOIN mode_decisions md
+                ON t.id = md.tweet_id AND md.mode_id = ?
+            WHERE md.tweet_id IS NULL
+            ORDER BY t.captured_at DESC
+            LIMIT ?
+            """,
+            (mode_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_all_tweet_ids(db_path: Path = DEFAULT_DB_PATH) -> list[str]:
+    """Get all tweet IDs in the database."""
+    with transaction(db_path) as conn:
+        rows = conn.execute("SELECT id FROM tweets").fetchall()
+        return [row["id"] for row in rows]
 
 
 # =============================================================================
