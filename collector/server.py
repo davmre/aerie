@@ -7,7 +7,6 @@ and stores them in SQLite for later classification.
 """
 
 import json
-import os
 import threading
 import time
 from pathlib import Path
@@ -68,7 +67,8 @@ DEFAULT_CLASSIFICATION_CONFIG = {
     "enabled": True,
     "batch_size": 10,
     "batch_timeout": 0.2,  # seconds to wait for batch to fill
-    "model": "claude-sonnet-4-20250514",
+    "provider": "anthropic",  # LLM provider (anthropic, gemini)
+    "model": None,  # Model to use (None = provider's default)
     "default_prompt_id": "binary_filter_v1",
 }
 
@@ -88,9 +88,20 @@ def start_classification_worker(db_path: Path, config: dict):
             print("[Worker] Classification worker disabled")
             return
 
-        has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
-        if not has_api_key:
-            print("[Worker] No ANTHROPIC_API_KEY, LLM classification disabled (prefilters still work)")
+        # Check for API key based on configured provider
+        from providers import get_default_provider, get_provider
+
+        provider_name = config.get("provider") or get_default_provider()
+        try:
+            provider = get_provider(provider_name)
+            has_api_key = bool(provider.get_api_key())
+            if not has_api_key:
+                print(
+                    f"[Worker] No {provider.config.api_key_env_var}, LLM classification disabled (prefilters still work)"
+                )
+        except ValueError as e:
+            print(f"[Worker] Invalid provider: {e}")
+            has_api_key = False
 
         def worker_loop():
             print("[Worker] Classification worker started")
@@ -133,11 +144,14 @@ def start_classification_worker(db_path: Path, config: dict):
                                 continue
 
                             # Classify the batch
-                            print(f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}")
+                            print(
+                                f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}"
+                            )
                             results = classify_and_store_batch(
                                 tweets_list,
                                 prompt_id,
-                                model=config["model"],
+                                provider_name=config.get("provider"),
+                                model=config.get("model"),
                                 db_path=db_path,
                             )
 
@@ -309,8 +323,7 @@ def create_app(config=None):
         # - tweets with pending status (need LLM or prefilter)
         # - tweets with prefilter decisions but no cached entry yet
         uncached_ids = [
-            tid for tid in ids
-            if tid not in cached_decisions and statuses.get(tid) != "unknown"
+            tid for tid in ids if tid not in cached_decisions and statuses.get(tid) != "unknown"
         ]
 
         if uncached_ids:
@@ -326,10 +339,7 @@ def create_app(config=None):
                     statuses[tid] = computed[tid][mode_id]
 
             # Queue remaining pending tweets for LLM classification
-            still_pending = [
-                tid for tid in uncached_ids
-                if statuses.get(tid) == "pending"
-            ]
+            still_pending = [tid for tid in uncached_ids if statuses.get(tid) == "pending"]
             if still_pending:
                 mode = get_mode(mode_id, db_path)
                 prompt_id = (
@@ -455,6 +465,15 @@ def create_app(config=None):
         if data.get("prefilter") and data["prefilter"] not in PREFILTER_SCHEMAS:
             return jsonify({"error": f"Unknown prefilter: {data['prefilter']}"}), 400
 
+        # Validate provider if provided
+        provider = data.get("provider", "anthropic")
+        from providers import PROVIDERS
+
+        if provider not in PROVIDERS:
+            return jsonify(
+                {"error": f"Unknown provider: {provider}. Available: {', '.join(PROVIDERS.keys())}"}
+            ), 400
+
         # Create mode
         create_mode(
             mode_id=mode_id,
@@ -465,6 +484,8 @@ def create_app(config=None):
             extractor_config=data.get("extractor_config"),
             prefilter_config=data.get("prefilter_config"),
             description=data.get("description"),
+            provider=provider,
+            model_name=data.get("model_name"),
             db_path=db_path,
         )
 
@@ -500,12 +521,25 @@ def create_app(config=None):
         if data.get("prefilter") and data["prefilter"] not in PREFILTER_SCHEMAS:
             return jsonify({"error": f"Unknown prefilter: {data['prefilter']}"}), 400
 
+        # Validate provider if changing
+        if data.get("provider"):
+            from providers import PROVIDERS
+
+            if data["provider"] not in PROVIDERS:
+                return jsonify(
+                    {
+                        "error": f"Unknown provider: {data['provider']}. Available: {', '.join(PROVIDERS.keys())}"
+                    }
+                ), 400
+
         # Determine what to clear vs update
         # If prefilter is explicitly null/empty, clear it
         clear_prefilter = "prefilter" in data and not data.get("prefilter")
         # If config is explicitly null or {}, clear it
         clear_extractor_config = "extractor_config" in data and not data.get("extractor_config")
         clear_prefilter_config = "prefilter_config" in data and not data.get("prefilter_config")
+        # If model_name is explicitly null/empty, clear it
+        clear_model_name = "model_name" in data and not data.get("model_name")
 
         update_mode(
             mode_id=mode_id,
@@ -516,13 +550,18 @@ def create_app(config=None):
             extractor_config=data.get("extractor_config") if not clear_extractor_config else None,
             prefilter_config=data.get("prefilter_config") if not clear_prefilter_config else None,
             description=data.get("description"),
+            provider=data.get("provider"),
+            model_name=data.get("model_name") if not clear_model_name else None,
             clear_prefilter=clear_prefilter,
             clear_extractor_config=clear_extractor_config,
             clear_prefilter_config=clear_prefilter_config,
+            clear_model_name=clear_model_name,
             db_path=db_path,
         )
 
         # Invalidate and recompute cached decisions if config changed
+        # Note: provider/model_name changes don't require recomputing cached decisions
+        # since they only affect future LLM calls, not the cached response interpretations
         config_changed = any(
             [
                 data.get("prompt_id"),
@@ -581,6 +620,13 @@ def create_app(config=None):
         return jsonify(
             {"prompts": [{"id": p["id"], "created_at": p.get("created_at")} for p in prompts]}
         )
+
+    @app.route("/api/providers", methods=["GET"])
+    def api_list_providers():
+        """List available LLM providers."""
+        from providers import list_providers
+
+        return jsonify({"providers": list_providers()})
 
     # =========================================================================
     # Web UI Routes
@@ -954,11 +1000,13 @@ def create_app(config=None):
                 for tid, resp in responses.items():
                     if tid not in responses_by_tweet:
                         responses_by_tweet[tid] = []
-                    responses_by_tweet[tid].append({
-                        "prompt_id": pid,
-                        "model": resp.get("model"),
-                        "response": resp.get("response"),
-                    })
+                    responses_by_tweet[tid].append(
+                        {
+                            "prompt_id": pid,
+                            "model": resp.get("model"),
+                            "response": resp.get("response"),
+                        }
+                    )
 
         # Enrich tweets in chains
         for chain_entry in chains:

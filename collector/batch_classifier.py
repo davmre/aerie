@@ -6,18 +6,22 @@ in a single LLM request, reducing costs by ~3.5x compared to single-tweet
 requests.
 """
 
-import json
-import os
-import re
 from pathlib import Path
 
-import anthropic
-from anthropic.types import TextBlock
-
 from database import DEFAULT_DB_PATH, get_prompt, store_prompt_response
+from providers import LLMProvider, get_default_provider, get_provider
 
-# Default model for classification
-DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+# Re-export parse_batch_response for backwards compatibility with existing code
+def parse_batch_response(response_text: str, expected_ids: list[str]) -> dict[str, dict]:
+    """
+    Parse batch classification response into per-tweet results.
+
+    This is a convenience wrapper around LLMProvider.parse_batch_response.
+    """
+    # Create a temporary instance just to access the parsing logic
+    provider = get_provider(get_default_provider())
+    return provider.parse_batch_response(response_text, expected_ids)
 
 
 def format_tweet_for_batch(tweet: dict, index: int) -> str:
@@ -98,77 +102,11 @@ Example response format:
 ]"""
 
 
-def parse_batch_response(
-    response_text: str,
-    expected_ids: list[str],
-) -> dict[str, dict]:
-    """
-    Parse the LLM's batch response into per-tweet results.
-
-    Returns a dict mapping tweet_id -> response dict.
-    Handles partial failures gracefully.
-    """
-    results = {}
-
-    def extract_from_list(parsed: list) -> None:
-        """Extract results from a parsed JSON list."""
-        for item in parsed:
-            if isinstance(item, dict) and "id" in item:
-                tweet_id = str(item["id"])
-                results[tweet_id] = {
-                    "approved": bool(item.get("approved", False)),
-                    "reason": str(item.get("reason", "")),
-                }
-
-    # Try to parse as JSON array
-    try:
-        parsed = json.loads(response_text.strip())
-        if isinstance(parsed, list):
-            extract_from_list(parsed)
-    except json.JSONDecodeError:
-        pass
-
-    # If direct parse didn't work, try to find JSON array in the response
-    if not results:
-        array_match = re.search(r"\[[\s\S]*\]", response_text)
-        if array_match:
-            try:
-                parsed = json.loads(array_match.group())
-                if isinstance(parsed, list):
-                    extract_from_list(parsed)
-            except json.JSONDecodeError:
-                pass
-
-    # If still no results, try to extract individual JSON objects
-    if not results:
-        for obj_match in re.finditer(r'\{[^{}]*"id"\s*:\s*"?(\d+)"?[^{}]*\}', response_text):
-            try:
-                obj = json.loads(obj_match.group())
-                if "id" in obj:
-                    tweet_id = str(obj["id"])
-                    results[tweet_id] = {
-                        "approved": bool(obj.get("approved", False)),
-                        "reason": str(obj.get("reason", "")),
-                    }
-            except json.JSONDecodeError:
-                continue
-
-    # Mark any missing tweets as errors
-    for tweet_id in expected_ids:
-        if tweet_id not in results:
-            results[tweet_id] = {
-                "_error": "parse_failed",
-                "_raw": response_text[:200] if not results else "missing from response",
-            }
-
-    return results
-
-
 def classify_tweets_batch(
     tweets: list[dict],
     prompt_id: str,
-    model: str = DEFAULT_MODEL,
-    client: anthropic.Anthropic | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
 ) -> dict[str, dict]:
     """
     Classify multiple tweets in a single LLM request.
@@ -176,8 +114,8 @@ def classify_tweets_batch(
     Args:
         tweets: List of tweet dicts with id, text, author_username, etc.
         prompt_id: ID of the prompt to use from the prompts table.
-        model: Model to use for classification.
-        client: Optional Anthropic client (creates one if not provided).
+        provider_name: LLM provider ("anthropic", "gemini"). Defaults to "anthropic".
+        model: Model to use (defaults to provider's default model).
 
     Returns:
         Dict mapping tweet_id -> classification result dict.
@@ -191,48 +129,36 @@ def classify_tweets_batch(
     if not prompt:
         return {t["id"]: {"_error": "prompt_not_found", "_prompt_id": prompt_id} for t in tweets}
 
-    # Create client if needed
-    if client is None:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not api_key:
-            return {t["id"]: {"_error": "no_api_key"} for t in tweets}
-        client = anthropic.Anthropic(api_key=api_key)
+    # Get provider
+    if provider_name is None:
+        provider_name = get_default_provider()
+
+    try:
+        provider = get_provider(provider_name)
+    except ValueError as e:
+        return {t["id"]: {"_error": "provider_error", "_message": str(e)[:200]} for t in tweets}
+
+    # Check API key
+    if not provider.get_api_key():
+        return {
+            t["id"]: {"_error": "no_api_key", "_env_var": provider.config.api_key_env_var}
+            for t in tweets
+        }
 
     # Build the batch prompt and format tweets
     system_prompt = build_batch_prompt(prompt["prompt_text"])
     tweets_text = format_tweets_batch(tweets)
     expected_ids = [t["id"] for t in tweets]
 
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=100 * len(tweets),  # ~100 tokens per tweet response
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"Classify these tweets:\n\n{tweets_text}"}],
-        )
-
-        first_block = response.content[0]
-        if not isinstance(first_block, TextBlock):
-            return {
-                t["id"]: {"_error": "unexpected_response", "_message": "No text content"}
-                for t in tweets
-            }
-        content = first_block.text.strip()
-        return parse_batch_response(content, expected_ids)
-
-    except anthropic.RateLimitError as e:
-        return {t["id"]: {"_error": "rate_limit", "_message": str(e)[:100]} for t in tweets}
-    except anthropic.APIError as e:
-        return {t["id"]: {"_error": "api_error", "_message": str(e)[:200]} for t in tweets}
-    except Exception as e:
-        return {t["id"]: {"_error": "unexpected_error", "_message": str(e)[:200]} for t in tweets}
+    # Use provider's batch classification
+    return provider.classify_batch(tweets_text, expected_ids, system_prompt, model)
 
 
 def classify_and_store_batch(
     tweets: list[dict],
     prompt_id: str,
-    model: str = DEFAULT_MODEL,
-    client: anthropic.Anthropic | None = None,
+    provider_name: str | None = None,
+    model: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, dict]:
     """
@@ -241,12 +167,25 @@ def classify_and_store_batch(
     This is a convenience wrapper around classify_tweets_batch that
     also persists the results to the database.
 
+    Args:
+        tweets: List of tweet dicts with id, text, author_username, etc.
+        prompt_id: ID of the prompt to use from the prompts table.
+        provider_name: LLM provider ("anthropic", "gemini"). Defaults to "anthropic".
+        model: Model to use (defaults to provider's default model).
+        db_path: Path to the database.
+
     Returns the classification results.
     """
-    results = classify_tweets_batch(tweets, prompt_id, model, client)
+    # Get actual model name for storage
+    if provider_name is None:
+        provider_name = get_default_provider()
+    provider = get_provider(provider_name)
+    actual_model = provider.get_model(model)
+
+    results = classify_tweets_batch(tweets, prompt_id, provider_name, model)
 
     # Store each result
     for tweet_id, response in results.items():
-        store_prompt_response(tweet_id, prompt_id, model, response, db_path)
+        store_prompt_response(tweet_id, prompt_id, actual_model, response, db_path)
 
     return results

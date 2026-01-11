@@ -30,7 +30,7 @@ The goal is to filter out ragebait, doomposting, and low-quality content before 
             ▼
 ┌─────────────────────────┐
 │  Classifier             │
-│  (Claude API)           │
+│  (Anthropic/Gemini API) │
 │  └── classifier.py      │
 └─────────────────────────┘
 ```
@@ -110,6 +110,8 @@ If a human needs to click through to understand a tweet, an LLM would benefit fr
 - `extractor` - Extractor function name to extract decision from response
 - `extractor_config` - JSON config for parameterized extractors
 - `prefilter_config` - JSON config for parameterized prefilters
+- `provider` - LLM provider ("anthropic", "gemini")
+- `model_name` - Optional model override
 
 **human_labels** - Ground truth for evaluation
 - `tweet_id`, `mode_id` - Composite primary key
@@ -168,6 +170,7 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/api/extractors` | GET | List available extractors with config schemas |
 | `/api/prefilters` | GET | List available prefilters with config schemas |
 | `/api/prompts` | GET | List available prompts |
+| `/api/providers` | GET | List available LLM providers |
 | `/ui/label` | GET | Web UI for labeling tweets |
 | `/ui/read` | GET | Web UI for reading approved tweets |
 | `/ui/modes` | GET | Web UI for managing classification modes |
@@ -245,7 +248,11 @@ get_thread_context_batch(tweet_ids, db_path)          # Risky
 
 ## Classifier
 
-The server includes a background worker that classifies tweets automatically. Requires `ANTHROPIC_API_KEY` environment variable.
+The server includes a background worker that classifies tweets automatically. Supports multiple LLM providers:
+- **Anthropic** (default): Set `ANTHROPIC_API_KEY`
+- **Gemini**: Set `GEMINI_API_KEY` and `pip install google-genai`
+
+Each mode can specify its own provider and model.
 
 ```bash
 cd collector
@@ -253,13 +260,15 @@ cd collector
 # Manual batch classification
 python classifier.py                          # Classify pending tweets
 python classifier.py classify --verbose       # With detailed output
+python classifier.py classify --provider gemini  # Use Gemini instead
 python classifier.py recompute-decisions      # Refresh cached mode decisions
 
 # Inspect
 python classifier.py prompts                  # List prompts
 python classifier.py modes                    # List modes
+python classifier.py providers                # List available providers
 ```
 
 **Built-in prompts:** `binary_filter_v1` (yes/no filter), `topic_tagger_v1` (topics + quality scores)
 
-**Custom modes:** Create via web UI at `/ui/modes` or CLI. Modes combine a prompt with an extractor and optional prefilter. See `extractors.py` and `prefilters.py` for examples.
+**Custom modes:** Create via web UI at `/ui/modes` or CLI. Modes combine a prompt with an extractor, optional prefilter, and provider. See `extractors.py`, `prefilters.py`, and `providers.py`.

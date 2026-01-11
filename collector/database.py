@@ -143,7 +143,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 FOREIGN KEY (prompt_id) REFERENCES prompts(id)
             );
 
-            -- Mode definitions (prompt + extractor)
+            -- Mode definitions (prompt + extractor + provider)
             CREATE TABLE IF NOT EXISTS modes (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -151,6 +151,8 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 prefilter TEXT,
                 extractor TEXT NOT NULL,
                 description TEXT,
+                provider TEXT DEFAULT 'anthropic',
+                model_name TEXT,
                 FOREIGN KEY (prompt_id) REFERENCES prompts(id)
             );
 
@@ -226,6 +228,8 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
         mode_new_columns = [
             ("extractor_config", "TEXT"),
             ("prefilter_config", "TEXT"),
+            ("provider", "TEXT DEFAULT 'anthropic'"),
+            ("model_name", "TEXT"),
         ]
         for col_name, col_type in mode_new_columns:
             if col_name not in existing_mode_columns:
@@ -478,6 +482,8 @@ def create_mode(
     extractor_config: dict | None = None,
     prefilter_config: dict | None = None,
     description: str | None = None,
+    provider: str = "anthropic",
+    model_name: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
     """Create or update a mode definition."""
@@ -485,8 +491,8 @@ def create_mode(
         conn.execute(
             """
             INSERT OR REPLACE INTO modes
-            (id, name, prompt_id, prefilter, extractor, extractor_config, prefilter_config, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, name, prompt_id, prefilter, extractor, extractor_config, prefilter_config, description, provider, model_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 mode_id,
@@ -497,6 +503,8 @@ def create_mode(
                 json.dumps(extractor_config) if extractor_config else None,
                 json.dumps(prefilter_config) if prefilter_config else None,
                 description,
+                provider,
+                model_name,
             ),
         )
 
@@ -524,9 +532,12 @@ def update_mode(
     extractor_config: dict | None = None,
     prefilter_config: dict | None = None,
     description: str | None = None,
+    provider: str | None = None,
+    model_name: str | None = None,
     clear_prefilter: bool = False,
     clear_extractor_config: bool = False,
     clear_prefilter_config: bool = False,
+    clear_model_name: bool = False,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> bool:
     """
@@ -564,6 +575,12 @@ def update_mode(
         if description is not None:
             updates.append("description = ?")
             params.append(description)
+        if provider is not None:
+            updates.append("provider = ?")
+            params.append(provider)
+        if model_name is not None or clear_model_name:
+            updates.append("model_name = ?")
+            params.append(model_name)
 
         if not updates:
             return True  # Nothing to update

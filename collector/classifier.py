@@ -8,12 +8,7 @@ Responses are cached in prompt_responses for use by mode extractors.
 
 import argparse
 import json
-import os
-import re
 from pathlib import Path
-
-import anthropic
-from anthropic.types import TextBlock
 
 from database import (
     DEFAULT_DB_PATH,
@@ -28,6 +23,7 @@ from database import (
     store_prompt_response,
 )
 from modes import compute_all_mode_decisions
+from providers import get_default_provider, get_provider, list_providers
 
 # =============================================================================
 # Built-in Prompts
@@ -161,48 +157,34 @@ def format_tweet_for_classification(tweet: dict) -> str:
 
 
 def call_llm(
-    client: anthropic.Anthropic,
     tweet: dict,
     system_prompt: str,
-    model: str = "claude-sonnet-4-20250514",
+    provider_name: str = "anthropic",
+    model: str | None = None,
 ) -> dict:
     """
     Call the LLM and return the parsed JSON response.
     Returns the parsed response dict, or an error dict if parsing fails.
+
+    Args:
+        tweet: Tweet dict with text, author info, etc.
+        system_prompt: The classification prompt.
+        provider_name: LLM provider to use ("anthropic", "gemini", etc.)
+        model: Model to use (defaults to provider's default).
     """
     tweet_text = format_tweet_for_classification(tweet)
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=200,
-            system=system_prompt,
-            messages=[{"role": "user", "content": f"Analyze this tweet:\n\n{tweet_text}"}],
-        )
-
-        first_block = response.content[0]
-        if not isinstance(first_block, TextBlock):
-            return {"_error": "unexpected_response", "_message": "No text content"}
-        content = first_block.text.strip()
-
-        # Parse JSON response
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            # Try to find JSON in the response
-            json_match = re.search(r"\{[^{}]*\}", content, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group())
-            # Return raw content as error
-            return {"_error": "parse_failed", "_raw": content[:500]}
-
-    except anthropic.APIError as e:
-        return {"_error": "api_error", "_message": str(e)[:200]}
+        provider = get_provider(provider_name)
+        return provider.classify(tweet_text, system_prompt, model)
+    except ValueError as e:
+        return {"_error": "provider_error", "_message": str(e)[:200]}
 
 
 def run_classification(
     prompt_id: str,
-    model: str = "claude-sonnet-4-20250514",
+    provider_name: str | None = None,
+    model: str | None = None,
     batch_size: int = 10,
     max_tweets: int | None = None,
     db_path: Path = DEFAULT_DB_PATH,
@@ -212,13 +194,39 @@ def run_classification(
     """
     Run classification for a specific prompt.
     Processes tweets that don't have responses for this prompt yet.
+
+    Args:
+        prompt_id: ID of the prompt to use.
+        provider_name: LLM provider ("anthropic", "gemini"). Defaults to "anthropic".
+        model: Model to use. Defaults to provider's default model.
+        batch_size: Number of tweets to process per batch.
+        max_tweets: Maximum number of tweets to classify.
+        db_path: Path to the database.
+        dry_run: If True, don't save results.
+        verbose: If True, show detailed output.
     """
-    # Check for API key
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("Error: ANTHROPIC_API_KEY environment variable not set")
-        print("Get your API key from https://console.anthropic.com/")
+    # Use default provider if not specified
+    if provider_name is None:
+        provider_name = get_default_provider()
+
+    # Get provider and validate API key
+    try:
+        provider = get_provider(provider_name)
+    except ValueError as e:
+        print(f"Error: {e}")
         return
+
+    api_key = provider.get_api_key()
+    if not api_key:
+        print(f"Error: {provider.config.api_key_env_var} environment variable not set")
+        if provider_name == "anthropic":
+            print("Get your API key from https://console.anthropic.com/")
+        elif provider_name == "gemini":
+            print("Get your API key from https://aistudio.google.com/apikey")
+        return
+
+    # Use provider's default model if not specified
+    actual_model = provider.get_model(model)
 
     # Get prompt
     prompt = get_prompt(prompt_id, db_path)
@@ -229,16 +237,18 @@ def run_classification(
             print(f"  - {p['id']}")
         return
 
-    client = anthropic.Anthropic(api_key=api_key)
     system_prompt = prompt["prompt_text"]
 
     # Get stats
     stats = get_stats(db_path=db_path)
-    tweets_to_process = get_tweets_without_response(prompt_id, model, limit=10000, db_path=db_path)
+    tweets_to_process = get_tweets_without_response(
+        prompt_id, actual_model, limit=10000, db_path=db_path
+    )
     pending_count = len(tweets_to_process)
 
     print(f"Prompt: {prompt_id}")
-    print(f"Model: {model}")
+    print(f"Provider: {provider_name}")
+    print(f"Model: {actual_model}")
     print(f"Database: {stats['total']} total tweets, {pending_count} need classification")
 
     if pending_count == 0:
@@ -263,7 +273,7 @@ def run_classification(
         # Fetch next batch
         remaining = limit - processed
         fetch_count = min(batch_size, remaining)
-        tweets = get_tweets_without_response(prompt_id, model, fetch_count, db_path)
+        tweets = get_tweets_without_response(prompt_id, actual_model, fetch_count, db_path)
 
         if not tweets:
             break
@@ -283,7 +293,7 @@ def run_classification(
                 print(f"  [{processed + i + 1}/{limit}] @{author}: {text_preview}")
 
             # Call LLM
-            response = call_llm(client, tweet, system_prompt, model)
+            response = call_llm(tweet, system_prompt, provider_name, actual_model)
 
             if verbose:
                 if "_error" in response:
@@ -293,7 +303,7 @@ def run_classification(
 
             # Store response
             if not dry_run:
-                store_prompt_response(tweet_id, prompt_id, model, response, db_path)
+                store_prompt_response(tweet_id, prompt_id, actual_model, response, db_path)
 
             if "_error" in response:
                 error_count += 1
@@ -315,7 +325,7 @@ def run_classification(
     if not dry_run and success_count > 0:
         print()
         print("Updating mode decision cache...")
-        decision_results = compute_all_mode_decisions(model, db_path)
+        decision_results = compute_all_mode_decisions(actual_model, db_path)
         for mode_id, result in decision_results.items():
             if result["computed"] > 0:
                 print(f"  {mode_id}: {result['computed']} decisions computed")
@@ -338,6 +348,7 @@ def cmd_classify(args):
     setup_prompts_and_modes(args.db)
     run_classification(
         prompt_id=args.prompt,
+        provider_name=args.provider,
         model=args.model,
         batch_size=args.batch_size,
         max_tweets=args.max_tweets,
@@ -378,6 +389,9 @@ def cmd_list_modes(args):
         print(f"    Extractor: {m['extractor']}")
         if m["prefilter"]:
             print(f"    Prefilter: {m['prefilter']}")
+        provider = m.get("provider", "anthropic")
+        model_name = m.get("model_name")
+        print(f"    Provider: {provider}" + (f" ({model_name})" if model_name else ""))
         if m["description"]:
             print(f"    Description: {m['description']}")
 
@@ -402,6 +416,14 @@ def cmd_create_mode(args):
         print(f"Error: Prompt '{args.prompt}' not found")
         return
 
+    # Verify provider exists
+    provider_name = args.provider or "anthropic"
+    try:
+        get_provider(provider_name)
+    except ValueError as e:
+        print(f"Error: {e}")
+        return
+
     create_mode(
         mode_id=args.id,
         name=args.name or args.id,
@@ -409,6 +431,8 @@ def cmd_create_mode(args):
         extractor=args.extractor,
         prefilter=args.prefilter,
         description=args.description,
+        provider=provider_name,
+        model_name=args.model,
         db_path=args.db,
     )
     print(f"Created mode: {args.id}")
@@ -448,6 +472,19 @@ def cmd_recompute_decisions(args):
     print("Done!")
 
 
+def cmd_list_providers(args):
+    """List available LLM providers."""
+    providers = list_providers()
+    print("Available providers:")
+    for p in providers:
+        status = "[API key set]" if p["api_key_set"] else "[API key missing]"
+        print(f"\n  {p['name']} {status}")
+        print(f"    {p['description']}")
+        print(f"    Default model: {p['default_model']}")
+        print(f"    Available models: {', '.join(p['available_models'])}")
+        print(f"    API key env var: {p['api_key_env_var']}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Aerie Tweet Classifier",
@@ -471,9 +508,13 @@ def main():
         help="Prompt ID to use (default: binary_filter_v1)",
     )
     classify_parser.add_argument(
+        "--provider",
+        "-p",
+        help="LLM provider to use (anthropic, gemini). Default: anthropic",
+    )
+    classify_parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use",
+        help="Model to use (defaults to provider's default model)",
     )
     classify_parser.add_argument(
         "--batch-size",
@@ -511,6 +552,10 @@ def main():
     modes_parser = subparsers.add_parser("modes", help="List modes")
     modes_parser.set_defaults(func=cmd_list_modes)
 
+    # providers command
+    providers_parser = subparsers.add_parser("providers", help="List available LLM providers")
+    providers_parser.set_defaults(func=cmd_list_providers)
+
     # create-prompt command
     create_prompt_parser = subparsers.add_parser("create-prompt", help="Create a prompt from file")
     create_prompt_parser.add_argument("id", help="Prompt ID")
@@ -526,6 +571,10 @@ def main():
     create_mode_parser.add_argument("--prefilter", help="Prefilter function name")
     create_mode_parser.add_argument("--name", help="Display name")
     create_mode_parser.add_argument("--description", help="Mode description")
+    create_mode_parser.add_argument(
+        "--provider", help="LLM provider (anthropic, gemini). Default: anthropic"
+    )
+    create_mode_parser.add_argument("--model", help="Model to use (defaults to provider's default)")
     create_mode_parser.set_defaults(func=cmd_create_mode)
 
     # recompute-decisions command
@@ -540,7 +589,8 @@ def main():
     if args.command is None:
         # Default to classify with default prompt
         args.prompt = "binary_filter_v1"
-        args.model = "claude-sonnet-4-20250514"
+        args.provider = None  # Will use default provider
+        args.model = None  # Will use provider's default model
         args.batch_size = 10
         args.max_tweets = None
         args.dry_run = False
