@@ -5,11 +5,11 @@
 {% block extra_styles %}
 <style>
 .mode-stats {
-    color: #666;
+    color: var(--text-tertiary);
     font-size: 0.9rem;
     margin-bottom: 16px;
     padding: 8px 0;
-    border-bottom: 1px solid #2a2a2a;
+    border-bottom: 1px solid var(--border-secondary);
 }
 </style>
 {% endblock %}
@@ -156,7 +156,7 @@ function renderTweet(tweet, index) {
                 </div>
                 <div class="tweet-meta">
                     <span class="status-badge status-${modeStatus}">${modeStatus}</span>
-                    ${humanLabel !== null ? `<span class="status-badge" style="margin-left: 6px; background: #1a1a3d; color: #a0a0ff;">human: ${humanLabel ? 'show' : 'hide'}</span>` : ''}
+                    ${humanLabel !== null ? `<span class="status-badge status-human" style="margin-left: 6px;">human: ${humanLabel ? 'show' : 'hide'}</span>` : ''}
                 </div>
             </div>
 
@@ -225,7 +225,7 @@ function renderPagination(total) {
     if (currentPage > 0) {
         html += `<button class="btn" onclick="goToPage(${currentPage - 1})">Prev</button>`;
     }
-    html += `<span style="color: #666; padding: 0 10px;">Page ${currentPage + 1} of ${totalPages}</span>`;
+    html += `<span style="color: var(--text-tertiary); padding: 0 10px;">Page ${currentPage + 1} of ${totalPages}</span>`;
     if (currentPage < totalPages - 1) {
         html += `<button class="btn" onclick="goToPage(${currentPage + 1})">Next</button>`;
     }

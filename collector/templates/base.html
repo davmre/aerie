@@ -5,6 +5,98 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Aerie{% endblock %}</title>
     <style>
+        /* Theme variables */
+        :root {
+            /* Dark theme (default) */
+            --bg-body: #0a0a0a;
+            --bg-card: #161616;
+            --bg-nested: #0d0d0d;
+            --bg-input: #1a1a1a;
+            --bg-button: #222;
+            --bg-button-hover: #333;
+            --bg-selected: #1a1f2e;
+            --bg-modal-overlay: rgba(0, 0, 0, 0.8);
+
+            --text-primary: #e0e0e0;
+            --text-heading: #fff;
+            --text-secondary: #888;
+            --text-tertiary: #666;
+            --text-muted: #555;
+            --text-context: #aaa;
+            --text-quoted: #ccc;
+
+            --border-primary: #333;
+            --border-secondary: #2a2a2a;
+            --border-tertiary: #444;
+            --border-input: #444;
+            --border-thread: #222;
+
+            --accent: #6cb6ff;
+            --accent-approved-bg: #1a3d1a;
+            --accent-approved-text: #4ade80;
+            --accent-approved-border: #2d5a2d;
+            --accent-filtered-bg: #3d1a1a;
+            --accent-filtered-text: #f87171;
+            --accent-filtered-border: #5a2d2d;
+            --accent-pending-bg: #3d3d1a;
+            --accent-pending-text: #facc15;
+            --accent-human-bg: #1a1a3d;
+            --accent-human-text: #a0a0ff;
+            --accent-protected: #3a3a2a;
+
+            --btn-primary-bg: #2563eb;
+            --btn-primary-border: #3b82f6;
+            --btn-primary-hover: #3b82f6;
+            --btn-danger-bg: #dc2626;
+            --btn-danger-border: #ef4444;
+            --btn-danger-hover: #ef4444;
+        }
+
+        [data-theme="light"] {
+            --bg-body: #f5f5f5;
+            --bg-card: #ffffff;
+            --bg-nested: #f0f0f0;
+            --bg-input: #ffffff;
+            --bg-button: #e8e8e8;
+            --bg-button-hover: #d8d8d8;
+            --bg-selected: #e8f0ff;
+            --bg-modal-overlay: rgba(0, 0, 0, 0.5);
+
+            --text-primary: #1a1a1a;
+            --text-heading: #000;
+            --text-secondary: #555;
+            --text-tertiary: #777;
+            --text-muted: #888;
+            --text-context: #444;
+            --text-quoted: #333;
+
+            --border-primary: #ddd;
+            --border-secondary: #e0e0e0;
+            --border-tertiary: #ccc;
+            --border-input: #ccc;
+            --border-thread: #e5e5e5;
+
+            --accent: #0969da;
+            --accent-approved-bg: #dafbe1;
+            --accent-approved-text: #1a7f37;
+            --accent-approved-border: #4ade80;
+            --accent-filtered-bg: #ffebe9;
+            --accent-filtered-text: #cf222e;
+            --accent-filtered-border: #f87171;
+            --accent-pending-bg: #fff8c5;
+            --accent-pending-text: #9a6700;
+            --accent-human-bg: #ddf4ff;
+            --accent-human-text: #0550ae;
+            --accent-protected: #f6f8fa;
+
+            --btn-primary-bg: #2563eb;
+            --btn-primary-border: #3b82f6;
+            --btn-primary-hover: #1d4ed8;
+            --btn-danger-bg: #dc2626;
+            --btn-danger-border: #ef4444;
+            --btn-danger-hover: #b91c1c;
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -13,13 +105,13 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            background: #0a0a0a;
-            color: #e0e0e0;
+            background: var(--bg-body);
+            color: var(--text-primary);
             line-height: 1.5;
         }
 
         a {
-            color: #6cb6ff;
+            color: var(--accent);
             text-decoration: none;
         }
 
@@ -34,7 +126,7 @@
         }
 
         header {
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid var(--border-primary);
             padding: 15px 0;
             margin-bottom: 20px;
         }
@@ -52,17 +144,17 @@
 
         nav a {
             margin-right: 20px;
-            color: #888;
+            color: var(--text-secondary);
         }
 
         nav a:hover, nav a.active {
-            color: #e0e0e0;
+            color: var(--text-primary);
         }
 
         /* Tweet card styles */
         .tweet {
-            background: #161616;
-            border: 1px solid #2a2a2a;
+            background: var(--bg-card);
+            border: 1px solid var(--border-secondary);
             border-radius: 8px;
             padding: 16px;
             margin-bottom: 12px;
@@ -70,12 +162,12 @@
         }
 
         .tweet:hover {
-            border-color: #444;
+            border-color: var(--border-tertiary);
         }
 
         .tweet.selected {
-            border-color: #6cb6ff;
-            background: #1a1f2e;
+            border-color: var(--accent);
+            background: var(--bg-selected);
         }
 
         .tweet-header {
@@ -86,16 +178,16 @@
 
         .tweet-author {
             font-weight: 600;
-            color: #fff;
+            color: var(--text-heading);
         }
 
         .tweet-username {
-            color: #666;
+            color: var(--text-tertiary);
             margin-left: 6px;
         }
 
         .tweet-meta {
-            color: #555;
+            color: var(--text-muted);
             font-size: 0.85rem;
         }
 
@@ -108,7 +200,7 @@
         .tweet-metrics {
             display: flex;
             gap: 16px;
-            color: #666;
+            color: var(--text-tertiary);
             font-size: 0.85rem;
         }
 
@@ -119,18 +211,18 @@
         }
 
         .tweet-link {
-            color: #666;
+            color: var(--text-tertiary);
             text-decoration: none;
             margin-left: 6px;
         }
 
         .tweet-link:hover {
-            color: #6cb6ff;
+            color: var(--accent);
             text-decoration: none;
         }
 
         .tweet-text a {
-            color: #6cb6ff;
+            color: var(--accent);
         }
 
         .tweet-text a:hover {
@@ -139,18 +231,18 @@
 
         .retweeted-by {
             font-size: 0.85rem;
-            color: #888;
+            color: var(--text-secondary);
             margin-bottom: 8px;
             padding-bottom: 8px;
-            border-bottom: 1px solid #2a2a2a;
+            border-bottom: 1px solid var(--border-secondary);
         }
 
         /* Quoted tweet */
         .quoted-tweet {
             margin-top: 12px;
             padding: 12px;
-            background: #0d0d0d;
-            border: 1px solid #2a2a2a;
+            background: var(--bg-nested);
+            border: 1px solid var(--border-secondary);
             border-radius: 8px;
             font-size: 0.9rem;
         }
@@ -168,14 +260,14 @@
         }
 
         .quoted-tweet-text {
-            color: #ccc;
+            color: var(--text-quoted);
             white-space: pre-wrap;
             word-wrap: break-word;
         }
 
         /* Collapsible text */
         .text-toggle {
-            color: #6cb6ff;
+            color: var(--accent);
             cursor: pointer;
             font-size: 0.85em;
             margin-left: 4px;
@@ -189,22 +281,22 @@
         .thread-context {
             margin-bottom: 12px;
             padding: 12px;
-            background: #0d0d0d;
-            border: 1px solid #2a2a2a;
+            background: var(--bg-nested);
+            border: 1px solid var(--border-secondary);
             border-radius: 8px;
-            border-left: 3px solid #6cb6ff;
+            border-left: 3px solid var(--accent);
         }
 
         .thread-label {
             font-size: 0.8rem;
-            color: #6cb6ff;
+            color: var(--accent);
             margin-bottom: 10px;
             font-weight: 500;
         }
 
         .thread-ancestor {
             padding: 8px 0;
-            border-bottom: 1px solid #222;
+            border-bottom: 1px solid var(--border-thread);
         }
 
         .thread-ancestor:last-child {
@@ -225,7 +317,7 @@
         }
 
         .thread-ancestor-text {
-            color: #aaa;
+            color: var(--text-context);
             font-size: 0.9rem;
             white-space: pre-wrap;
             word-wrap: break-word;
@@ -242,53 +334,58 @@
         }
 
         .status-approved {
-            background: #1a3d1a;
-            color: #4ade80;
+            background: var(--accent-approved-bg);
+            color: var(--accent-approved-text);
         }
 
         .status-filtered {
-            background: #3d1a1a;
-            color: #f87171;
+            background: var(--accent-filtered-bg);
+            color: var(--accent-filtered-text);
         }
 
         .status-pending {
-            background: #3d3d1a;
-            color: #facc15;
+            background: var(--accent-pending-bg);
+            color: var(--accent-pending-text);
+        }
+
+        .status-human {
+            background: var(--accent-human-bg);
+            color: var(--accent-human-text);
         }
 
         /* Buttons */
         .btn {
             padding: 6px 12px;
             border-radius: 6px;
-            border: 1px solid #444;
-            background: #222;
-            color: #e0e0e0;
+            border: 1px solid var(--border-tertiary);
+            background: var(--bg-button);
+            color: var(--text-primary);
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.15s;
         }
 
         .btn:hover {
-            background: #333;
-            border-color: #555;
+            background: var(--bg-button-hover);
+            border-color: var(--border-tertiary);
         }
 
         .btn-approve {
-            background: #1a3d1a;
-            border-color: #2d5a2d;
+            background: var(--accent-approved-bg);
+            border-color: var(--accent-approved-border);
         }
 
         .btn-approve:hover {
-            background: #2d5a2d;
+            background: var(--accent-approved-border);
         }
 
         .btn-filter {
-            background: #3d1a1a;
-            border-color: #5a2d2d;
+            background: var(--accent-filtered-bg);
+            border-color: var(--accent-filtered-border);
         }
 
         .btn-filter:hover {
-            background: #5a2d2d;
+            background: var(--accent-filtered-border);
         }
 
         .btn-small {
@@ -300,15 +397,15 @@
         select, input {
             padding: 8px 12px;
             border-radius: 6px;
-            border: 1px solid #444;
-            background: #1a1a1a;
-            color: #e0e0e0;
+            border: 1px solid var(--border-input);
+            background: var(--bg-input);
+            color: var(--text-primary);
             font-size: 0.9rem;
         }
 
         select:focus, input:focus {
             outline: none;
-            border-color: #6cb6ff;
+            border-color: var(--accent);
         }
 
         /* Controls bar */
@@ -321,7 +418,7 @@
         }
 
         .controls label {
-            color: #888;
+            color: var(--text-secondary);
             font-size: 0.9rem;
         }
 
@@ -330,17 +427,17 @@
             position: fixed;
             bottom: 20px;
             right: 20px;
-            background: #222;
-            border: 1px solid #444;
+            background: var(--bg-button);
+            border: 1px solid var(--border-tertiary);
             border-radius: 8px;
             padding: 12px 16px;
             font-size: 0.8rem;
-            color: #888;
+            color: var(--text-secondary);
         }
 
         .keyboard-help kbd {
-            background: #333;
-            border: 1px solid #555;
+            background: var(--bg-button-hover);
+            border: 1px solid var(--border-tertiary);
             border-radius: 3px;
             padding: 2px 6px;
             margin-right: 4px;
@@ -358,18 +455,18 @@
         .loading {
             text-align: center;
             padding: 40px;
-            color: #666;
+            color: var(--text-tertiary);
         }
 
         /* Response viewer */
         .responses {
             margin-top: 12px;
             padding-top: 12px;
-            border-top: 1px solid #2a2a2a;
+            border-top: 1px solid var(--border-secondary);
         }
 
         .response-item {
-            background: #0d0d0d;
+            background: var(--bg-nested);
             border-radius: 6px;
             padding: 10px;
             margin-bottom: 8px;
@@ -380,13 +477,13 @@
             display: flex;
             justify-content: space-between;
             margin-bottom: 6px;
-            color: #888;
+            color: var(--text-secondary);
         }
 
         .response-json {
             font-family: monospace;
             white-space: pre-wrap;
-            color: #aaa;
+            color: var(--text-context);
         }
 
         /* Mode decisions */
@@ -402,7 +499,7 @@
             align-items: center;
             gap: 6px;
             padding: 4px 10px;
-            background: #1a1a1a;
+            background: var(--bg-input);
             border-radius: 4px;
             font-size: 0.8rem;
         }
@@ -425,13 +522,13 @@
         }
 
         .label-btn.show {
-            background: #1a3d1a;
-            color: #4ade80;
+            background: var(--accent-approved-bg);
+            color: var(--accent-approved-text);
         }
 
         .label-btn.hide {
-            background: #3d1a1a;
-            color: #f87171;
+            background: var(--accent-filtered-bg);
+            color: var(--accent-filtered-text);
         }
 
         .label-btn:hover {
@@ -441,10 +538,49 @@
         .label-btn.active {
             border-color: currentColor;
         }
+
+        /* Theme toggle */
+        .theme-toggle {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: var(--bg-button);
+            border: 1px solid var(--border-tertiary);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-button-hover);
+        }
+
+        .theme-toggle-icon {
+            font-size: 1rem;
+        }
     </style>
     {% block extra_styles %}{% endblock %}
 </head>
 <body>
+    <script>
+        // Theme initialization - runs before page renders to prevent flash
+        (function() {
+            const stored = localStorage.getItem('aerie-theme');
+            if (stored === 'light' || stored === 'dark') {
+                document.documentElement.setAttribute('data-theme', stored);
+            } else {
+                // Auto mode: light during day (6am-6pm), dark at night
+                const hour = new Date().getHours();
+                const isDay = hour >= 6 && hour < 18;
+                document.documentElement.setAttribute('data-theme', isDay ? 'light' : 'dark');
+            }
+        })();
+    </script>
     <div class="container">
         <header>
             <h1>Aerie</h1>
@@ -457,6 +593,12 @@
 
         {% block content %}{% endblock %}
     </div>
+
+    <!-- Theme toggle button -->
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        <span class="theme-toggle-icon" id="theme-icon"></span>
+        <span id="theme-label"></span>
+    </button>
 
     <script>
         // Stats management - can be called by child templates
@@ -621,6 +763,72 @@
                 </div>
             `;
         }
+
+        // =================================================================
+        // Theme management
+        // =================================================================
+
+        function getThemePreference() {
+            return localStorage.getItem('aerie-theme'); // 'light', 'dark', or null (auto)
+        }
+
+        function getCurrentTheme() {
+            return document.documentElement.getAttribute('data-theme') || 'dark';
+        }
+
+        function getAutoTheme() {
+            const hour = new Date().getHours();
+            return (hour >= 6 && hour < 18) ? 'light' : 'dark';
+        }
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            updateThemeToggle();
+        }
+
+        function toggleTheme() {
+            const pref = getThemePreference();
+            const current = getCurrentTheme();
+
+            // Cycle: auto -> light -> dark -> auto
+            if (pref === null) {
+                // Currently auto, switch to explicit light
+                localStorage.setItem('aerie-theme', 'light');
+                applyTheme('light');
+            } else if (pref === 'light') {
+                // Currently light, switch to dark
+                localStorage.setItem('aerie-theme', 'dark');
+                applyTheme('dark');
+            } else {
+                // Currently dark, switch to auto
+                localStorage.removeItem('aerie-theme');
+                applyTheme(getAutoTheme());
+            }
+        }
+
+        function updateThemeToggle() {
+            const pref = getThemePreference();
+            const current = getCurrentTheme();
+            const iconEl = document.getElementById('theme-icon');
+            const labelEl = document.getElementById('theme-label');
+
+            if (!iconEl || !labelEl) return;
+
+            if (pref === null) {
+                // Auto mode
+                iconEl.textContent = current === 'light' ? '☀️' : '🌙';
+                labelEl.textContent = 'Auto';
+            } else if (pref === 'light') {
+                iconEl.textContent = '☀️';
+                labelEl.textContent = 'Light';
+            } else {
+                iconEl.textContent = '🌙';
+                labelEl.textContent = 'Dark';
+            }
+        }
+
+        // Initialize theme toggle display on page load
+        document.addEventListener('DOMContentLoaded', updateThemeToggle);
     </script>
     {% block extra_scripts %}{% endblock %}
 </body>
