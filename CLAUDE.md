@@ -35,69 +35,21 @@ The goal is to filter out ragebait, doomposting, and low-quality content before 
 └─────────────────────────┘
 ```
 
-## Key Technical Decisions
+## Technical Decisions & Gotchas
 
-### Tweet Capture: webRequest.filterResponseData
+### Tweet Capture
+We use Firefox's `webRequest.filterResponseData()` to intercept Twitter's GraphQL API responses. This operates at the browser level, invisible to Twitter's page JavaScript. The data arrives already decompressed despite headers saying `gzip`/`br`.
 
-We use Firefox's `webRequest.filterResponseData()` API to intercept Twitter's GraphQL API responses. This approach:
-- Operates at the browser level, **invisible to Twitter's page JavaScript**
-- Gets structured JSON data (tweet IDs, text, author, threading, etc.)
-- Passes data through unchanged (read-only wiretap)
+### Tweet Hiding
+We use `opacity: 0.02` to hide tweets. This is critical:
+- `display: none` / `max-height: 0` breaks Twitter's virtualized list (viewport calculations fail)
+- `opacity: 0` triggers Twitter's "Welcome to X!" empty state (visibility tracking)
+- `filter: blur()` is GPU-intensive and laggy
 
-Alternative considered: Content script that patches `fetch`/`XMLHttpRequest`. Rejected because it's detectable by the page.
+Twitter virtualizes the timeline aggressively—tweets are removed/re-added as you scroll. Our content script handles this with a cache and `requestAnimationFrame` for deferred processing.
 
-### Tweet Hiding: CSS opacity
-
-We went through several iterations:
-
-1. **`display: none` / `max-height: 0`** - Broke Twitter's virtualized list. Twitter only keeps visible tweets in the DOM; collapsing height confused its viewport calculations, causing infinite scroll failures and tweets disappearing.
-
-2. **`filter: blur()`** - Worked but was extremely slow. Blur is GPU-intensive, especially with embedded videos. Scrolling became laggy and tweets took seconds to render.
-
-3. **`opacity: 0.02`** (current) - Fast and effective. Tweets are essentially invisible but still "exist" in the layout, so Twitter's virtualization works normally.
-
-### Content Script Timing
-
-The content script uses `requestAnimationFrame` to defer tweet processing. Processing tweets synchronously in the MutationObserver callback can interfere with Twitter's own DOM operations. Deferring lets Twitter's code complete first.
-
-### Cache Pre-loading
-
-On page load, the content script fetches all classified tweet IDs from the backend (`GET /tweets/classified-ids`). This populates the in-memory cache so subsequent status checks are instant (no network round-trip).
-
-## Lessons Learned / Gotchas
-
-### Firefox filterResponseData gives decompressed data
-Despite response headers saying `content-encoding: gzip` or `br`, Firefox's `filterResponseData` provides already-decompressed data. We don't need to handle decompression ourselves.
-
-### Twitter's visibility tracking
-Twitter tracks which tweets you've "seen" (likely via Intersection Observer). CSS that makes tweets invisible (`opacity: 0`, `display: none`) may confuse this tracking and cause:
-- "Welcome to X!" empty feed state
-- Infinite scroll stopping
-- Feed thinking all tweets are "read"
-
-Using `opacity: 0.02` (nearly invisible but not zero) seems to avoid these issues.
-
-### Twitter's virtualized list
-Twitter aggressively virtualizes the timeline - only tweets in/near the viewport exist in the DOM. As you scroll:
-- Tweets leaving the viewport are removed from DOM
-- Tweets entering the viewport are added fresh
-
-This means:
-- Our content script must handle tweets being removed and re-added
-- CSS that collapses tweet height breaks viewport calculations
-- We maintain a cache so re-added tweets get their status reapplied instantly
-
-### MutationObserver overhead
-Watching `document.body` with `subtree: true` catches all DOM changes. This can be expensive if we process synchronously. Using `requestAnimationFrame` to batch and defer processing helps.
-
-### GraphQL endpoint patterns
-Twitter's timeline data comes from endpoints like:
-- `/graphql/.../HomeTimeline` - "For You" feed
-- `/graphql/.../HomeLatestTimeline` - "Following" feed
-- `/graphql/.../TweetDetail` - Individual tweet view
-- `/graphql/.../UserTweets` - Profile tweets
-
-The hash in the URL (e.g., `/graphql/abc123xyz/HomeTimeline`) changes periodically but the operation name at the end is stable.
+### GraphQL Endpoints
+Twitter's timeline data comes from `/graphql/.../HomeTimeline`, `/graphql/.../HomeLatestTimeline`, etc. The hash in the URL changes but the operation name is stable.
 
 ## Web UI
 
@@ -265,241 +217,52 @@ git branch -d dev/session1
 
 ## Testing
 
-The collector uses pytest for integration testing. Tests use isolated SQLite databases (via `tmp_path` fixtures) so they don't affect production data.
-
 ```bash
-# Run all tests
 cd collector
 pytest tests/ -v
-
-# Run specific test file
-pytest tests/test_read_view.py -v
-
-# Run specific test class
-pytest tests/test_read_view.py::TestLeafOnlyFiltering -v
 ```
 
-### Test Structure
+Tests use isolated SQLite databases via `tmp_path` fixtures. See `tests/conftest.py` for fixtures (`test_db`, `app`, `client`) and `tests/fixtures.py` for helpers (`make_tweet`, `make_thread`, `approve_tweets`).
 
-```
-collector/tests/
-├── __init__.py
-├── conftest.py      # Pytest fixtures (test_db, app, client)
-├── fixtures.py      # Helper functions for creating test data
-└── test_read_view.py # Integration tests for the Read view API
-```
+The Flask app uses the factory pattern (`create_app(config)`) to support test isolation with custom database paths.
 
-### Key Fixtures
-
-- `test_db` - Fresh SQLite database for each test (with prompts/modes initialized)
-- `app` - Flask app configured with test database and classification disabled
-- `client` - Flask test client for making API requests
-
-### Helper Functions (fixtures.py)
-
-```python
-# Create a tweet
-tweet = make_tweet(id="123", text="Hello", author_username="user1")
-
-# Create a thread (A <- B <- C)
-tweets = make_thread(base_id=100, length=3, author="user1")
-
-# Store tweets and mark as approved
-create_and_store_tweets(tweets, test_db)
-approve_tweets(["100", "101", "102"], test_db)
-```
-
-### App Factory Pattern
-
-The Flask app uses the factory pattern (`create_app()`) to support test isolation:
-
-```python
-from server import create_app
-
-# Production
-app = create_app()
-
-# Testing with custom config
-app = create_app({
-    "DATABASE": test_db_path,
-    "TESTING": True,
-    "CLASSIFICATION_ENABLED": False,
-})
-```
-
-## Type Checking
-
-The collector uses pyright for static type checking. This catches bugs like passing arguments in the wrong position (e.g., passing `db_path` where `max_depth` is expected).
+## Type Checking and Linting
 
 ```bash
-# Run type checker
 cd collector
-pyright
+pyright          # Type checking
+ruff check .     # Linting (use --fix to auto-fix)
+ruff format .    # Formatting
 ```
 
-Configuration is in `pyproject.toml`:
-- Python 3.12 target
-- Basic type checking mode (catches real bugs without being overly strict)
-- Reports missing imports, unused variables, and duplicate imports
-
-**Common patterns:**
-
+Configuration is in `pyproject.toml`. Key convention: use keyword arguments for functions with multiple optional parameters to avoid positional argument bugs:
 ```python
-# Use keyword arguments for functions with multiple optional parameters
 get_thread_context_batch(tweet_ids, db_path=db_path)  # Good
-get_thread_context_batch(tweet_ids, db_path)          # Risky - positional arg
-
-# Use isinstance() for union types (e.g., Anthropic API responses)
-first_block = response.content[0]
-if isinstance(first_block, TextBlock):
-    content = first_block.text.strip()  # Type-safe access
-
-# Use | None for optional parameters with None defaults
-def my_func(items: set[str] | None = None):
-    items = items or set()
+get_thread_context_batch(tweet_ids, db_path)          # Risky
 ```
 
-## Linting and Formatting
+## Classifier
 
-The collector uses ruff for linting and code formatting.
+The server includes a background worker that classifies tweets automatically. Requires `ANTHROPIC_API_KEY` environment variable.
 
 ```bash
 cd collector
 
-# Check for linting issues
-ruff check .
+# Manual batch classification
+python classifier.py                          # Classify pending tweets
+python classifier.py classify --verbose       # With detailed output
+python classifier.py recompute-decisions      # Refresh cached mode decisions
 
-# Auto-fix linting issues
-ruff check . --fix
-
-# Format code
-ruff format .
+# Inspect
+python classifier.py prompts                  # List prompts
+python classifier.py modes                    # List modes
 ```
 
-Configuration is in `pyproject.toml`. The setup includes:
-- **pycodestyle** (E/W): Style errors and warnings
-- **pyflakes** (F): Unused imports, undefined names
-- **isort** (I): Import sorting
-- **pyupgrade** (UP): Python version upgrades (e.g., `Optional[X]` → `X | None`)
-- **flake8-bugbear** (B): Common bug patterns
-- **flake8-simplify** (SIM): Code simplification suggestions
+**Built-in prompts:** `binary_filter_v1` (yes/no filter), `topic_tagger_v1` (topics + quality scores)
 
-## Classifier Usage
-
-The classifier uses Claude to evaluate tweets against prompts stored in the database.
-
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY="your-key-here"
-
-# Classify with default prompt (binary_filter_v1)
-python classifier.py
-
-# Classify with a specific prompt
-python classifier.py classify topic_tagger_v1
-
-# Classify with verbose output
-python classifier.py classify --verbose
-
-# Dry run (no changes saved)
-python classifier.py classify --dry-run --verbose
-
-# Limit to 20 tweets, use faster/cheaper model
-python classifier.py classify --max 20 --model claude-3-haiku-20240307
-
-# List available prompts
-python classifier.py prompts
-
-# Recompute cached decisions for all modes
-# (run after schema migration or to refresh cache)
-python classifier.py recompute-decisions
-
-# List available modes
-python classifier.py modes
-
-# Create a custom mode
-python classifier.py create-mode ml_focus \
-    --prompt topic_tagger_v1 \
-    --extractor topic_ml \
-    --name "ML Focus" \
-    --description "Show only ML/AI content"
-```
-
-### Built-in Prompts
-
-- **binary_filter_v1**: Simple yes/no filter for quality content
-- **topic_tagger_v1**: Extracts topics and quality scores (toxicity, informativeness, etc.)
-
-### Creating Custom Modes
-
-Modes can be created via the web UI at `/ui/modes` or via the CLI. They combine a prompt with an extractor and optional prefilter.
-
-**Simple vs Factory Functions**
-
-Extractors and prefilters come in two types:
-- **Simple**: No configuration (e.g., `default`, `approve_all`)
-- **Factory**: Accept configuration parameters (e.g., `topic_contains` takes a topic string, `make_author_filter` takes whitelist/blacklist arrays)
-
-The web UI dynamically renders config fields based on each function's schema.
-
-**Adding Custom Functions**
-
-```python
-# extractors.py - add custom extractors
-def my_custom_extractor(response: dict) -> bool:
-    return "ml" in response.get("topics", []) and response.get("scores", {}).get("toxicity", 1) < 0.2
-
-# Register in EXTRACTOR_SCHEMAS for web UI visibility
-EXTRACTOR_SCHEMAS["my_custom"] = {"type": "simple", "description": "My custom filter"}
-
-# prefilters.py - add custom prefilters
-def my_whitelist(tweet: dict) -> bool | None:
-    if tweet.get("author_username") in {"favorite_author"}:
-        return True
-    return None  # Let LLM decide
-```
-
-## Real-Time Classification
-
-The server includes a background worker that automatically classifies tweets as they're captured or checked:
-
-```
-POST /tweets (capture)              POST /tweets/check
-    │                                    │
-    ├─ Store tweets                      ├─ Return cached status
-    └─ Queue (NORMAL priority)           └─ Queue pending (HIGH priority)
-                    │                              │
-                    └──────────┬───────────────────┘
-                               ▼
-                    ┌─────────────────────┐
-                    │ Background Worker    │
-                    │ (daemon thread)      │
-                    │                      │
-                    │ - Batches 10 tweets  │
-                    │ - Single LLM request │
-                    │ - Updates decisions  │
-                    └─────────────────────┘
-```
-
-**Requirements:**
-- Set `ANTHROPIC_API_KEY` environment variable
-- Worker starts automatically on first request
-
-**Configuration** (in `server.py`):
-```python
-CLASSIFICATION_CONFIG = {
-    "enabled": True,
-    "batch_size": 10,
-    "batch_timeout": 0.2,  # seconds
-    "model": "claude-sonnet-4-20250514",
-}
-```
-
-**Cost efficiency:** Batching 10 tweets per LLM request reduces costs by ~72% compared to single-tweet requests.
+**Custom modes:** Create via web UI at `/ui/modes` or CLI. Modes combine a prompt with an extractor and optional prefilter. See `extractors.py` and `prefilters.py` for examples.
 
 ## TODO
 
-- [x] Background/scheduled classification (cron or daemon)
 - [ ] Extension support for mode switching
 - [ ] Evaluation metrics for human labels vs model predictions
-- [ ] Batch API calls for efficiency (messages batches API)
