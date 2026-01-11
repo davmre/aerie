@@ -58,6 +58,7 @@ The collector service includes web interfaces:
 - `/ui/label` - Labeling interface for creating ground truth data
 - `/ui/read` - Clean reading view for approved tweets
 - `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
+- `/ui/prompts` - Prompt management UI for creating/editing classification prompts
 
 Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics. The Read page groups tweets into "conversation chains" - see `database.py` for the algorithm.
 
@@ -167,10 +168,12 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/api/modes/<id>` | GET/PUT/DELETE | Get, update, or delete a mode |
 | `/api/extractors` | GET | List available extractors with config schemas |
 | `/api/prefilters` | GET | List available prefilters with config schemas |
-| `/api/prompts` | GET | List available prompts |
+| `/api/prompts` | GET/POST | List prompts or create new prompt |
+| `/api/prompts/<id>` | GET/PUT/DELETE | Get, update, or delete a prompt |
 | `/ui/label` | GET | Web UI for labeling tweets |
 | `/ui/read` | GET | Web UI for reading approved tweets |
 | `/ui/modes` | GET | Web UI for managing classification modes |
+| `/ui/prompts` | GET | Web UI for managing prompts |
 
 ## Running the Project
 

@@ -469,6 +469,81 @@ def list_prompts(db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def update_prompt(
+    prompt_id: str,
+    prompt_text: str | None = None,
+    response_schema: str | None = None,
+    clear_response_schema: bool = False,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> bool:
+    """
+    Update an existing prompt. Only updates non-None fields.
+    Use clear_response_schema=True to set response_schema to NULL.
+    Returns True if prompt was found and updated, False otherwise.
+    """
+    with transaction(db_path) as conn:
+        # Check prompt exists
+        existing = conn.execute("SELECT id FROM prompts WHERE id = ?", (prompt_id,)).fetchone()
+        if not existing:
+            return False
+
+        updates = []
+        params = []
+
+        if prompt_text is not None:
+            updates.append("prompt_text = ?")
+            params.append(prompt_text)
+        if response_schema is not None or clear_response_schema:
+            updates.append("response_schema = ?")
+            params.append(response_schema)
+
+        if not updates:
+            return True  # Nothing to update
+
+        params.append(prompt_id)
+        conn.execute(
+            f"UPDATE prompts SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
+        return True
+
+
+def delete_prompt(prompt_id: str, force: bool = False, db_path: Path = DEFAULT_DB_PATH) -> dict:
+    """
+    Delete a prompt.
+    Returns {"status": "ok"} on success.
+    Returns {"error": "...", "mode_count": N} if prompt is used by modes and force=False.
+    If force=True, deletion proceeds (modes will have dangling references).
+    """
+    with transaction(db_path) as conn:
+        # Check for dependent modes
+        mode_count = conn.execute(
+            "SELECT COUNT(*) FROM modes WHERE prompt_id = ?", (prompt_id,)
+        ).fetchone()[0]
+
+        if mode_count > 0 and not force:
+            return {
+                "error": f"Prompt is used by {mode_count} mode(s). Use force=True to delete anyway.",
+                "mode_count": mode_count,
+            }
+
+        # Delete the prompt
+        result = conn.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
+        if result.rowcount == 0:
+            return {"error": "Prompt not found"}
+
+        return {"status": "ok"}
+
+
+def count_modes_using_prompt(prompt_id: str, db_path: Path = DEFAULT_DB_PATH) -> int:
+    """Count how many modes reference this prompt."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM modes WHERE prompt_id = ?", (prompt_id,)
+        ).fetchone()
+        return row[0]
+
+
 def create_mode(
     mode_id: str,
     name: str,

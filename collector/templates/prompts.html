@@ -1,0 +1,526 @@
+{% extends "base.html" %}
+
+{% block title %}Prompts - Aerie{% endblock %}
+
+{% block content %}
+<div class="prompts-header">
+    <h2>Classification Prompts</h2>
+    <button class="btn btn-primary" onclick="showCreateModal()">+ New Prompt</button>
+</div>
+
+<div id="prompts-list">
+    <div class="loading">Loading prompts...</div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div id="prompt-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-large">
+        <div class="modal-header">
+            <h3 id="modal-title">Create Prompt</h3>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+        </div>
+        <form id="prompt-form">
+            <div class="form-group">
+                <label for="prompt-id">ID <span class="required">*</span></label>
+                <input type="text" id="prompt-id" name="id" required
+                       pattern="[a-zA-Z0-9_]+" placeholder="e.g., my_custom_filter_v1">
+                <small>Letters, numbers, underscores only</small>
+            </div>
+
+            <div class="form-group">
+                <label for="prompt-text">Prompt Text <span class="required">*</span></label>
+                <textarea id="prompt-text" name="prompt_text" required rows="12"
+                          placeholder="Enter the system prompt that will be sent to the LLM..."></textarea>
+                <small>This is the system prompt sent to Claude when classifying tweets.</small>
+            </div>
+
+            <div class="form-group">
+                <label for="prompt-schema">Response Schema (optional)</label>
+                <textarea id="prompt-schema" name="response_schema" rows="4"
+                          placeholder='e.g., {"type": "object", "properties": {...}}'></textarea>
+                <small>JSON schema describing the expected response format. Leave empty for unstructured responses.</small>
+            </div>
+
+            <div class="edit-warning" id="edit-warning" style="display: none;">
+                Note: Changing prompt text will affect future classifications but not existing cached responses.
+            </div>
+
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submit-btn">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-small">
+        <h3>Delete Prompt</h3>
+        <p id="delete-message"></p>
+        <div class="form-actions">
+            <button class="btn" onclick="hideDeleteModal()">Cancel</button>
+            <button class="btn btn-danger" id="confirm-delete-btn">Delete</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// State
+let prompts = [];
+let editingPromptId = null;
+
+// Load initial data
+async function loadData() {
+    try {
+        const res = await fetch('/api/prompts');
+        const data = await res.json();
+        prompts = data.prompts;
+        renderPrompts();
+    } catch (err) {
+        document.getElementById('prompts-list').innerHTML =
+            `<div class="loading">Error loading data: ${err.message}</div>`;
+    }
+}
+
+function truncateText(text, maxLen) {
+    if (!text || text.length <= maxLen) return text || '';
+    return text.slice(0, maxLen) + '...';
+}
+
+function renderPrompts() {
+    const container = document.getElementById('prompts-list');
+
+    if (prompts.length === 0) {
+        container.innerHTML = '<div class="loading">No prompts configured</div>';
+        return;
+    }
+
+    container.innerHTML = prompts.map(prompt => `
+        <div class="prompt-card">
+            <div class="prompt-header">
+                <div>
+                    <span class="prompt-id">${escapeHtml(prompt.id)}</span>
+                    <span class="prompt-date">${formatDate(prompt.created_at)}</span>
+                </div>
+                <div class="prompt-actions">
+                    <button class="btn btn-small" onclick="editPrompt('${escapeHtml(prompt.id)}')">Edit</button>
+                    <button class="btn btn-small btn-danger"
+                            onclick="confirmDelete('${escapeHtml(prompt.id)}', ${prompt.mode_count || 0})">Delete</button>
+                </div>
+            </div>
+            <div class="prompt-preview">${escapeHtml(truncateText(prompt.prompt_text, 200))}</div>
+            <div class="prompt-meta">
+                ${prompt.mode_count > 0 ?
+                    `<span class="usage-badge">Used by ${prompt.mode_count} mode${prompt.mode_count > 1 ? 's' : ''}</span>` :
+                    '<span class="usage-badge unused">Not used</span>'}
+                ${prompt.response_schema ? '<span class="schema-badge">Has schema</span>' : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+// Modal handling
+function showCreateModal() {
+    editingPromptId = null;
+    document.getElementById('modal-title').textContent = 'Create Prompt';
+    document.getElementById('submit-btn').textContent = 'Create';
+    document.getElementById('prompt-id').disabled = false;
+    document.getElementById('edit-warning').style.display = 'none';
+    document.getElementById('prompt-form').reset();
+    document.getElementById('prompt-modal').style.display = 'flex';
+}
+
+async function editPrompt(promptId) {
+    editingPromptId = promptId;
+
+    // Fetch full prompt data
+    try {
+        const res = await fetch(`/api/prompts/${encodeURIComponent(promptId)}`);
+        if (!res.ok) {
+            alert('Failed to load prompt');
+            return;
+        }
+        const prompt = await res.json();
+
+        document.getElementById('modal-title').textContent = 'Edit Prompt';
+        document.getElementById('submit-btn').textContent = 'Save';
+        document.getElementById('prompt-id').value = prompt.id;
+        document.getElementById('prompt-id').disabled = true;
+        document.getElementById('prompt-text').value = prompt.prompt_text || '';
+        document.getElementById('prompt-schema').value = prompt.response_schema || '';
+        document.getElementById('edit-warning').style.display = 'block';
+        document.getElementById('prompt-modal').style.display = 'flex';
+    } catch (err) {
+        alert('Error loading prompt: ' + err.message);
+    }
+}
+
+function hideModal() {
+    document.getElementById('prompt-modal').style.display = 'none';
+}
+
+// Form submission
+document.getElementById('prompt-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const data = {
+        id: document.getElementById('prompt-id').value.trim(),
+        prompt_text: document.getElementById('prompt-text').value,
+        response_schema: document.getElementById('prompt-schema').value.trim() || null
+    };
+
+    // Validate response_schema is valid JSON if provided
+    if (data.response_schema) {
+        try {
+            JSON.parse(data.response_schema);
+        } catch (err) {
+            alert('Response schema must be valid JSON');
+            return;
+        }
+    }
+
+    try {
+        const method = editingPromptId ? 'PUT' : 'POST';
+        const url = editingPromptId ? `/api/prompts/${encodeURIComponent(editingPromptId)}` : '/api/prompts';
+
+        const res = await fetch(url, {
+            method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+            alert(result.error || 'Failed to save prompt');
+            return;
+        }
+
+        hideModal();
+        loadData();
+    } catch (err) {
+        alert('Error saving prompt: ' + err.message);
+    }
+});
+
+// Delete handling
+let deletingPromptId = null;
+
+function confirmDelete(promptId, modeCount) {
+    deletingPromptId = promptId;
+    let msg;
+    if (modeCount > 0) {
+        msg = `This prompt is used by ${modeCount} mode${modeCount > 1 ? 's' : ''}. ` +
+              `Deleting it will leave those modes with an invalid configuration. Are you sure?`;
+    } else {
+        msg = `Are you sure you want to delete prompt "${promptId}"?`;
+    }
+    document.getElementById('delete-message').textContent = msg;
+    document.getElementById('delete-modal').style.display = 'flex';
+}
+
+function hideDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+    deletingPromptId = null;
+}
+
+document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+    if (!deletingPromptId) return;
+
+    try {
+        const res = await fetch(`/api/prompts/${encodeURIComponent(deletingPromptId)}?force=true`, {method: 'DELETE'});
+        if (!res.ok) {
+            const result = await res.json();
+            alert(result.error || 'Failed to delete prompt');
+            return;
+        }
+        hideDeleteModal();
+        loadData();
+    } catch (err) {
+        alert('Error deleting prompt: ' + err.message);
+    }
+});
+
+// Close modals on escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        hideModal();
+        hideDeleteModal();
+    }
+});
+
+// Close modals on backdrop click
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            hideModal();
+            hideDeleteModal();
+        }
+    });
+});
+
+// Initial load
+loadData();
+</script>
+{% endblock %}
+
+{% block extra_styles %}
+<style>
+.prompts-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.prompts-header h2 {
+    margin: 0;
+}
+
+.prompt-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-secondary);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.prompt-card .prompt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.prompt-id {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-heading);
+    font-family: monospace;
+}
+
+.prompt-date {
+    color: var(--text-tertiary);
+    margin-left: 12px;
+    font-size: 0.85rem;
+}
+
+.prompt-preview {
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--text-context);
+    background: var(--bg-nested);
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 120px;
+    overflow: hidden;
+}
+
+.prompt-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.usage-badge {
+    font-size: 0.8rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent-approved-bg);
+    color: var(--accent-approved-text);
+}
+
+.usage-badge.unused {
+    background: var(--bg-nested);
+    color: var(--text-tertiary);
+}
+
+.schema-badge {
+    font-size: 0.8rem;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent-pending-bg);
+    color: var(--accent-pending-text);
+}
+
+.prompt-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Buttons */
+.prompts-header .btn,
+.prompt-actions .btn,
+.form-actions .btn {
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-tertiary);
+    background: var(--bg-button);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.prompts-header .btn:hover,
+.prompt-actions .btn:hover,
+.form-actions .btn:hover {
+    background: var(--bg-button-hover);
+}
+
+.btn-small {
+    padding: 4px 10px;
+    font-size: 0.85rem;
+}
+
+.btn-primary {
+    background: var(--btn-primary-bg);
+    border-color: var(--btn-primary-border);
+}
+
+.btn-primary:hover {
+    background: var(--btn-primary-hover);
+}
+
+.btn-danger {
+    background: var(--btn-danger-bg);
+    border-color: var(--btn-danger-border);
+}
+
+.btn-danger:hover {
+    background: var(--btn-danger-hover);
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-modal-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: var(--bg-input);
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    padding: 24px;
+    width: 100%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-large {
+    max-width: 700px;
+}
+
+.modal-small {
+    max-width: 400px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.modal-header h3 {
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    color: var(--text-heading);
+}
+
+/* Form */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-quoted);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-nested);
+    border: 1px solid var(--border-primary);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.form-group textarea {
+    font-family: monospace;
+    resize: vertical;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
+}
+
+.required {
+    color: var(--accent-filtered-text);
+}
+
+.edit-warning {
+    background: var(--accent-pending-bg);
+    color: var(--accent-pending-text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-primary);
+}
+
+.loading {
+    text-align: center;
+    color: var(--text-tertiary);
+    padding: 40px;
+}
+</style>
+{% endblock %}
