@@ -172,7 +172,7 @@ function renderTweet(tweet, index) {
                 <span>${tweet.reply_count || 0} replies</span>
             </div>
 
-            ${tweet.responses && tweet.responses.length > 0 ? renderResponses(tweet.responses) : ''}
+            ${(tweet.responses && tweet.responses.length > 0) || tweet.llm_input ? renderResponses(tweet.responses || [], tweet.llm_input) : ''}
 
             <div class="mode-decisions">
                 ${Object.entries(tweet.mode_decisions || {}).map(([mode, status]) =>
@@ -197,11 +197,20 @@ function renderTweet(tweet, index) {
     `;
 }
 
-// Render prompt responses
-function renderResponses(responses) {
+// Render prompt responses and LLM input
+function renderResponses(responses, llmInput) {
     const display = showResponses ? 'block' : 'none';
     return `
         <div class="responses" style="display: ${display}">
+            ${llmInput ? `
+                <div class="response-item">
+                    <div class="response-header">
+                        <span>LLM Input</span>
+                        <span>Exact text sent to classifier</span>
+                    </div>
+                    <div class="response-json">${escapeHtml(llmInput)}</div>
+                </div>
+            ` : ''}
             ${responses.map(r => `
                 <div class="response-item">
                     <div class="response-header">
