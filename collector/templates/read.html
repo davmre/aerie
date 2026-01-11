@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+
+{% block title %}Read - Aerie{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .read-tweet {
+        max-width: 600px;
+        margin: 0 auto 16px;
+    }
+
+    .read-tweet .tweet-text {
+        font-size: 1.1rem;
+        line-height: 1.6;
+    }
+
+    .reason-tooltip {
+        margin-top: 8px;
+        padding: 8px 12px;
+        background: var(--bg-nested);
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        display: none;
+    }
+
+    .read-tweet:hover .reason-tooltip {
+        display: block;
+    }
+
+    .load-more {
+        text-align: center;
+        padding: 20px;
+    }
+
+    .mode-stats {
+        max-width: 600px;
+        margin: 0 auto 16px;
+        color: var(--text-tertiary);
+        font-size: 0.9rem;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border-secondary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="controls" style="max-width: 600px; margin: 0 auto 20px;">
+    <label>Mode:</label>
+    <select id="mode-select">
+        {% for mode in modes %}
+        <option value="{{ mode.id }}">{{ mode.name }}</option>
+        {% endfor %}
+    </select>
+
+    <label>Sort:</label>
+    <select id="sort-select">
+        <option value="created_at">Tweet date</option>
+        <option value="captured_at">Captured date</option>
+    </select>
+
+    <label style="margin-left: 12px; cursor: pointer;">
+        <input type="checkbox" id="leaf-only-checkbox" checked style="margin-right: 4px;">
+        Collapse threads
+    </label>
+</div>
+
+<div class="mode-stats" id="mode-stats"></div>
+
+<div id="tweets-container">
+    <div class="loading">Loading tweets...</div>
+</div>
+
+<div class="load-more" id="load-more" style="display: none;">
+    <button class="btn" onclick="loadMore()">Load more</button>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const PAGE_SIZE = 30;
+let offset = 0;
+let hasMore = true;
+let loading = false;
+
+const container = document.getElementById('tweets-container');
+const modeSelect = document.getElementById('mode-select');
+const sortSelect = document.getElementById('sort-select');
+const leafOnlyCheckbox = document.getElementById('leaf-only-checkbox');
+const loadMoreDiv = document.getElementById('load-more');
+const statsDiv = document.getElementById('mode-stats');
+
+// Update stats display for current mode
+async function updateStats(mode) {
+    const stats = await fetchStats(mode);
+    if (stats.error) {
+        statsDiv.textContent = '';
+        return;
+    }
+    statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+}
+
+async function loadTweets(append = false) {
+    if (loading) return;
+    loading = true;
+
+    if (!append) {
+        container.innerHTML = '<div class="loading">Loading tweets...</div>';
+        offset = 0;
+    }
+
+    try {
+        const params = new URLSearchParams({
+            mode: modeSelect.value,
+            status: 'approved',
+            sort: sortSelect.value,
+            limit: PAGE_SIZE,
+            offset: offset,
+            leaf_only: leafOnlyCheckbox.checked
+        });
+
+        const response = await fetch(`/api/ui/tweets?${params}`);
+        const data = await response.json();
+
+        if (!append) {
+            container.innerHTML = '';
+        }
+
+        if (data.tweets.length === 0 && !append) {
+            container.innerHTML = '<div class="loading">No approved tweets in this mode yet</div>';
+            loadMoreDiv.style.display = 'none';
+            return;
+        }
+
+        data.tweets.forEach(tweet => {
+            container.insertAdjacentHTML('beforeend', renderTweet(tweet));
+        });
+
+        hasMore = data.tweets.length === PAGE_SIZE;
+        loadMoreDiv.style.display = hasMore ? 'block' : 'none';
+        offset += data.tweets.length;
+
+    } catch (err) {
+        if (!append) {
+            container.innerHTML = `<div class="loading">Error: ${err.message}</div>`;
+        }
+    } finally {
+        loading = false;
+    }
+}
+
+function loadMore() {
+    loadTweets(true);
+}
+
+function renderTweet(tweet) {
+    const response = tweet.responses?.[0];
+    const reason = response?.response?.reason || '';
+    const tweetUrl = tweet.author_username
+        ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
+        : `https://twitter.com/i/status/${tweet.id}`;
+    const retweetedBy = tweet.retweeted_by || [];
+    const threadAncestors = tweet.thread_ancestors || [];
+
+    return `
+        <div class="tweet read-tweet">
+            ${retweetedBy.length > 0 ? `
+                <div class="retweeted-by">
+                    🔁 Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
+                </div>
+            ` : ''}
+            ${threadAncestors.length > 0 ? renderThreadContext(threadAncestors) : ''}
+            <div class="tweet-header">
+                <div>
+                    <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
+                    <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                </div>
+                <div class="tweet-meta">
+                    <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
+                </div>
+            </div>
+
+            <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_TOPLEVEL, true, tweet.urls)}</div>
+
+            ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
+
+            <div class="tweet-metrics">
+                <span>${tweet.like_count || 0} likes</span>
+                <span>${tweet.retweet_count || 0} RTs</span>
+                <span>${tweet.reply_count || 0} replies</span>
+            </div>
+
+            ${reason ? `<div class="reason-tooltip">Approved: ${escapeHtml(reason)}</div>` : ''}
+        </div>
+    `;
+}
+
+// Infinite scroll
+window.addEventListener('scroll', () => {
+    if (!hasMore || loading) return;
+    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
+        loadMore();
+    }
+});
+
+modeSelect.addEventListener('change', () => { loadTweets(); updateStats(modeSelect.value); });
+sortSelect.addEventListener('change', () => loadTweets());
+leafOnlyCheckbox.addEventListener('change', () => loadTweets());
+
+// Initial load
+loadTweets();
+updateStats(modeSelect.value);
+</script>
+{% endblock %}

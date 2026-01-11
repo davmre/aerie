@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Aerie{% endblock %}</title>
+    <style>
+        /* Theme variables */
+        :root {
+            /* Dark theme (default) */
+            --bg-body: #0a0a0a;
+            --bg-card: #161616;
+            --bg-nested: #0d0d0d;
+            --bg-input: #1a1a1a;
+            --bg-button: #222;
+            --bg-button-hover: #333;
+            --bg-selected: #1a1f2e;
+            --bg-modal-overlay: rgba(0, 0, 0, 0.8);
+
+            --text-primary: #e0e0e0;
+            --text-heading: #fff;
+            --text-secondary: #888;
+            --text-tertiary: #666;
+            --text-muted: #555;
+            --text-context: #aaa;
+            --text-quoted: #ccc;
+
+            --border-primary: #333;
+            --border-secondary: #2a2a2a;
+            --border-tertiary: #444;
+            --border-input: #444;
+            --border-thread: #222;
+
+            --accent: #6cb6ff;
+            --accent-approved-bg: #1a3d1a;
+            --accent-approved-text: #4ade80;
+            --accent-approved-border: #2d5a2d;
+            --accent-filtered-bg: #3d1a1a;
+            --accent-filtered-text: #f87171;
+            --accent-filtered-border: #5a2d2d;
+            --accent-pending-bg: #3d3d1a;
+            --accent-pending-text: #facc15;
+            --accent-human-bg: #1a1a3d;
+            --accent-human-text: #a0a0ff;
+            --accent-protected: #3a3a2a;
+
+            --btn-primary-bg: #2563eb;
+            --btn-primary-border: #3b82f6;
+            --btn-primary-hover: #3b82f6;
+            --btn-danger-bg: #dc2626;
+            --btn-danger-border: #ef4444;
+            --btn-danger-hover: #ef4444;
+        }
+
+        [data-theme="light"] {
+            --bg-body: #f5f5f5;
+            --bg-card: #ffffff;
+            --bg-nested: #f0f0f0;
+            --bg-input: #ffffff;
+            --bg-button: #e8e8e8;
+            --bg-button-hover: #d8d8d8;
+            --bg-selected: #e8f0ff;
+            --bg-modal-overlay: rgba(0, 0, 0, 0.5);
+
+            --text-primary: #1a1a1a;
+            --text-heading: #000;
+            --text-secondary: #555;
+            --text-tertiary: #777;
+            --text-muted: #888;
+            --text-context: #444;
+            --text-quoted: #333;
+
+            --border-primary: #ddd;
+            --border-secondary: #e0e0e0;
+            --border-tertiary: #ccc;
+            --border-input: #ccc;
+            --border-thread: #e5e5e5;
+
+            --accent: #0969da;
+            --accent-approved-bg: #dafbe1;
+            --accent-approved-text: #1a7f37;
+            --accent-approved-border: #4ade80;
+            --accent-filtered-bg: #ffebe9;
+            --accent-filtered-text: #cf222e;
+            --accent-filtered-border: #f87171;
+            --accent-pending-bg: #fff8c5;
+            --accent-pending-text: #9a6700;
+            --accent-human-bg: #ddf4ff;
+            --accent-human-text: #0550ae;
+            --accent-protected: #f6f8fa;
+
+            --btn-primary-bg: #2563eb;
+            --btn-primary-border: #3b82f6;
+            --btn-primary-hover: #1d4ed8;
+            --btn-danger-bg: #dc2626;
+            --btn-danger-border: #ef4444;
+            --btn-danger-hover: #b91c1c;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            border-bottom: 1px solid var(--border-primary);
+            padding: 15px 0;
+            margin-bottom: 20px;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            display: inline;
+        }
+
+        nav {
+            display: inline;
+            margin-left: 30px;
+        }
+
+        nav a {
+            margin-right: 20px;
+            color: var(--text-secondary);
+        }
+
+        nav a:hover, nav a.active {
+            color: var(--text-primary);
+        }
+
+        /* Tweet card styles */
+        .tweet {
+            background: var(--bg-card);
+            border: 1px solid var(--border-secondary);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            transition: border-color 0.15s;
+        }
+
+        .tweet:hover {
+            border-color: var(--border-tertiary);
+        }
+
+        .tweet.selected {
+            border-color: var(--accent);
+            background: var(--bg-selected);
+        }
+
+        .tweet-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .tweet-author {
+            font-weight: 600;
+            color: var(--text-heading);
+        }
+
+        .tweet-username {
+            color: var(--text-tertiary);
+            margin-left: 6px;
+        }
+
+        .tweet-meta {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .tweet-text {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            margin-bottom: 12px;
+        }
+
+        .tweet-metrics {
+            display: flex;
+            gap: 16px;
+            color: var(--text-tertiary);
+            font-size: 0.85rem;
+        }
+
+        .tweet-metrics span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .tweet-link {
+            color: var(--text-tertiary);
+            text-decoration: none;
+            margin-left: 6px;
+        }
+
+        .tweet-link:hover {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        .tweet-text a {
+            color: var(--accent);
+        }
+
+        .tweet-text a:hover {
+            text-decoration: underline;
+        }
+
+        .retweeted-by {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-secondary);
+        }
+
+        /* Quoted tweet */
+        .quoted-tweet {
+            margin-top: 12px;
+            padding: 12px;
+            background: var(--bg-nested);
+            border: 1px solid var(--border-secondary);
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .quoted-tweet-header {
+            margin-bottom: 6px;
+        }
+
+        .quoted-tweet-header .tweet-author {
+            font-size: 0.85rem;
+        }
+
+        .quoted-tweet-header .tweet-username {
+            font-size: 0.85rem;
+        }
+
+        .quoted-tweet-text {
+            color: var(--text-quoted);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        /* Collapsible text */
+        .text-toggle {
+            color: var(--accent);
+            cursor: pointer;
+            font-size: 0.85em;
+            margin-left: 4px;
+        }
+
+        .text-toggle:hover {
+            text-decoration: underline;
+        }
+
+        /* Thread context */
+        .thread-context {
+            margin-bottom: 12px;
+            padding: 12px;
+            background: var(--bg-nested);
+            border: 1px solid var(--border-secondary);
+            border-radius: 8px;
+            border-left: 3px solid var(--accent);
+        }
+
+        .thread-label {
+            font-size: 0.8rem;
+            color: var(--accent);
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .thread-ancestor {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-thread);
+        }
+
+        .thread-ancestor:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .thread-ancestor-header {
+            margin-bottom: 4px;
+        }
+
+        .thread-ancestor-header .tweet-author {
+            font-size: 0.85rem;
+        }
+
+        .thread-ancestor-header .tweet-username {
+            font-size: 0.85rem;
+        }
+
+        .thread-ancestor-text {
+            color: var(--text-context);
+            font-size: 0.9rem;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        /* Status badges */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-approved {
+            background: var(--accent-approved-bg);
+            color: var(--accent-approved-text);
+        }
+
+        .status-filtered {
+            background: var(--accent-filtered-bg);
+            color: var(--accent-filtered-text);
+        }
+
+        .status-pending {
+            background: var(--accent-pending-bg);
+            color: var(--accent-pending-text);
+        }
+
+        .status-human {
+            background: var(--accent-human-bg);
+            color: var(--accent-human-text);
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-tertiary);
+            background: var(--bg-button);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.15s;
+        }
+
+        .btn:hover {
+            background: var(--bg-button-hover);
+            border-color: var(--border-tertiary);
+        }
+
+        .btn-approve {
+            background: var(--accent-approved-bg);
+            border-color: var(--accent-approved-border);
+        }
+
+        .btn-approve:hover {
+            background: var(--accent-approved-border);
+        }
+
+        .btn-filter {
+            background: var(--accent-filtered-bg);
+            border-color: var(--accent-filtered-border);
+        }
+
+        .btn-filter:hover {
+            background: var(--accent-filtered-border);
+        }
+
+        .btn-small {
+            padding: 3px 8px;
+            font-size: 0.8rem;
+        }
+
+        /* Form controls */
+        select, input {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-input);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            font-size: 0.9rem;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Controls bar */
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Keyboard shortcuts help */
+        .keyboard-help {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--bg-button);
+            border: 1px solid var(--border-tertiary);
+            border-radius: 8px;
+            padding: 12px 16px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .keyboard-help kbd {
+            background: var(--bg-button-hover);
+            border: 1px solid var(--border-tertiary);
+            border-radius: 3px;
+            padding: 2px 6px;
+            margin-right: 4px;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-tertiary);
+        }
+
+        /* Response viewer */
+        .responses {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-secondary);
+        }
+
+        .response-item {
+            background: var(--bg-nested);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 8px;
+            font-size: 0.85rem;
+        }
+
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+        }
+
+        .response-json {
+            font-family: monospace;
+            white-space: pre-wrap;
+            color: var(--text-context);
+        }
+
+        /* Mode decisions */
+        .mode-decisions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+        }
+
+        .mode-decision {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            background: var(--bg-input);
+            border-radius: 4px;
+            font-size: 0.8rem;
+        }
+
+        /* Labeling buttons */
+        .label-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .label-btn {
+            flex: 1;
+            padding: 8px;
+            border-radius: 6px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+
+        .label-btn.show {
+            background: var(--accent-approved-bg);
+            color: var(--accent-approved-text);
+        }
+
+        .label-btn.hide {
+            background: var(--accent-filtered-bg);
+            color: var(--accent-filtered-text);
+        }
+
+        .label-btn:hover {
+            filter: brightness(1.2);
+        }
+
+        .label-btn.active {
+            border-color: currentColor;
+        }
+
+        /* Theme toggle */
+        .theme-toggle {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: var(--bg-button);
+            border: 1px solid var(--border-tertiary);
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-button-hover);
+        }
+
+        .theme-toggle-icon {
+            font-size: 1rem;
+        }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+    <script>
+        // Theme initialization - runs before page renders to prevent flash
+        (function() {
+            const stored = localStorage.getItem('aerie-theme');
+            if (stored === 'light' || stored === 'dark') {
+                document.documentElement.setAttribute('data-theme', stored);
+            } else {
+                // Auto mode: light during day (6am-6pm), dark at night
+                const hour = new Date().getHours();
+                const isDay = hour >= 6 && hour < 18;
+                document.documentElement.setAttribute('data-theme', isDay ? 'light' : 'dark');
+            }
+        })();
+    </script>
+    <div class="container">
+        <header>
+            <h1>Aerie</h1>
+            <nav>
+                <a href="/ui/label" class="{% if active_page == 'label' %}active{% endif %}">Label</a>
+                <a href="/ui/read" class="{% if active_page == 'read' %}active{% endif %}">Read</a>
+                <a href="/ui/modes" class="{% if active_page == 'modes' %}active{% endif %}">Modes</a>
+            </nav>
+        </header>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Theme toggle button -->
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+        <span class="theme-toggle-icon" id="theme-icon"></span>
+        <span id="theme-label"></span>
+    </button>
+
+    <script>
+        // Stats management - can be called by child templates
+        // Returns a promise that resolves with the stats object
+        function fetchStats(mode) {
+            const url = mode ? `/stats?mode=${encodeURIComponent(mode)}` : '/stats';
+            return fetch(url)
+                .then(r => r.json())
+                .catch(() => ({ error: 'Failed to fetch stats' }));
+        }
+
+        // =================================================================
+        // Shared utility functions for tweet rendering
+        // =================================================================
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '';
+            try {
+                const date = new Date(dateStr);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            } catch {
+                return '';
+            }
+        }
+
+        function renderTextWithUrls(text, urls) {
+            if (!text) return '';
+            let result = escapeHtml(text);
+
+            // Parse URLs from the tweet's urls field if available
+            if (urls) {
+                try {
+                    const urlList = typeof urls === 'string' ? JSON.parse(urls) : urls;
+                    if (Array.isArray(urlList)) {
+                        for (const u of urlList) {
+                            const shortUrl = escapeHtml(u.url || '');
+                            const expandedUrl = u.expanded_url || u.url;
+                            const displayUrl = u.display_url || expandedUrl;
+                            if (shortUrl && expandedUrl) {
+                                result = result.replace(
+                                    shortUrl,
+                                    `<a href="${escapeHtml(expandedUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(displayUrl)}</a>`
+                                );
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to parse urls:', e);
+                }
+            }
+
+            // Also find any remaining URLs not in the urls list
+            result = result.replace(
+                /(https?:\/\/[^\s<]+)/g,
+                (match) => {
+                    // Don't double-wrap already-linked URLs
+                    if (result.indexOf(`href="${match}"`) !== -1) return match;
+                    return `<a href="${match}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${match}</a>`;
+                }
+            );
+
+            return result;
+        }
+
+        // Counter for generating unique IDs for collapsible text elements
+        let collapsibleIdCounter = 0;
+
+        /**
+         * Render text with optional truncation and expand/collapse toggle.
+         * @param {string} text - The text to render
+         * @param {number} maxLength - Max characters before truncating (0 = no limit)
+         * @param {boolean} processUrls - Whether to process URLs (for main tweet text)
+         * @param {object} urls - URL metadata for expansion (only used if processUrls=true)
+         * @returns {string} HTML string
+         */
+        function renderCollapsibleText(text, maxLength, processUrls = false, urls = null) {
+            if (!text) return '';
+
+            const needsTruncation = maxLength > 0 && text.length > maxLength;
+            const id = `collapsible-${collapsibleIdCounter++}`;
+
+            if (!needsTruncation) {
+                return processUrls ? renderTextWithUrls(text, urls) : escapeHtml(text);
+            }
+
+            // Find a good break point (word boundary) near maxLength
+            let breakPoint = maxLength;
+            const spaceIndex = text.lastIndexOf(' ', maxLength);
+            if (spaceIndex > maxLength * 0.7) {
+                breakPoint = spaceIndex;
+            }
+
+            const truncatedText = text.slice(0, breakPoint);
+            const fullText = text;
+
+            // For truncated text, we escape/process both versions
+            const truncatedHtml = processUrls ? renderTextWithUrls(truncatedText, urls) : escapeHtml(truncatedText);
+            const fullHtml = processUrls ? renderTextWithUrls(fullText, urls) : escapeHtml(fullText);
+
+            return `<span id="${id}-truncated">${truncatedHtml}... <span class="text-toggle" onclick="toggleText('${id}', event)">show more</span></span><span id="${id}-full" style="display: none;">${fullHtml} <span class="text-toggle" onclick="toggleText('${id}', event)">show less</span></span>`;
+        }
+
+        function toggleText(id, event) {
+            event.stopPropagation();
+            const truncated = document.getElementById(id + '-truncated');
+            const full = document.getElementById(id + '-full');
+            if (truncated && full) {
+                const isExpanded = truncated.style.display === 'none';
+                truncated.style.display = isExpanded ? 'inline' : 'none';
+                full.style.display = isExpanded ? 'none' : 'inline';
+            }
+        }
+
+        // Length limits for collapsible text
+        const TEXT_LIMIT_CONTEXT = 280;  // Thread ancestors, quote tweets
+        const TEXT_LIMIT_TOPLEVEL = 560; // Main tweet text
+
+        function renderQuotedTweet(qt) {
+            if (!qt) return '';
+            const qtUrl = qt.author_username
+                ? `https://twitter.com/${qt.author_username}/status/${qt.id}`
+                : `https://twitter.com/i/status/${qt.id}`;
+            return `
+                <div class="quoted-tweet" onclick="event.stopPropagation()">
+                    <div class="quoted-tweet-header">
+                        <span class="tweet-author">${escapeHtml(qt.author_display_name || qt.author_username || 'Unknown')}</span>
+                        <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
+                        <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+                    </div>
+                    <div class="quoted-tweet-text">${renderCollapsibleText(qt.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                </div>
+            `;
+        }
+
+        function renderThreadContext(ancestors) {
+            if (!ancestors || ancestors.length === 0) return '';
+            return `
+                <div class="thread-context" onclick="event.stopPropagation()">
+                    <div class="thread-label">🧵 Thread context (${ancestors.length} earlier ${ancestors.length === 1 ? 'post' : 'posts'})</div>
+                    ${ancestors.map(a => {
+                        const url = a.author_username
+                            ? `https://twitter.com/${a.author_username}/status/${a.id}`
+                            : `https://twitter.com/i/status/${a.id}`;
+                        return `
+                            <div class="thread-ancestor">
+                                <div class="thread-ancestor-header">
+                                    <span class="tweet-author">${escapeHtml(a.author_display_name || a.author_username || 'Unknown')}</span>
+                                    <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
+                                    <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
+                                </div>
+                                <div class="thread-ancestor-text">${renderCollapsibleText(a.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                                ${a.quoted_tweet ? renderQuotedTweet(a.quoted_tweet) : ''}
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+
+        // =================================================================
+        // Theme management
+        // =================================================================
+
+        function getThemePreference() {
+            return localStorage.getItem('aerie-theme'); // 'light', 'dark', or null (auto)
+        }
+
+        function getCurrentTheme() {
+            return document.documentElement.getAttribute('data-theme') || 'dark';
+        }
+
+        function getAutoTheme() {
+            const hour = new Date().getHours();
+            return (hour >= 6 && hour < 18) ? 'light' : 'dark';
+        }
+
+        function applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            updateThemeToggle();
+        }
+
+        function toggleTheme() {
+            const pref = getThemePreference();
+            const current = getCurrentTheme();
+
+            // Cycle: auto -> light -> dark -> auto
+            if (pref === null) {
+                // Currently auto, switch to explicit light
+                localStorage.setItem('aerie-theme', 'light');
+                applyTheme('light');
+            } else if (pref === 'light') {
+                // Currently light, switch to dark
+                localStorage.setItem('aerie-theme', 'dark');
+                applyTheme('dark');
+            } else {
+                // Currently dark, switch to auto
+                localStorage.removeItem('aerie-theme');
+                applyTheme(getAutoTheme());
+            }
+        }
+
+        function updateThemeToggle() {
+            const pref = getThemePreference();
+            const current = getCurrentTheme();
+            const iconEl = document.getElementById('theme-icon');
+            const labelEl = document.getElementById('theme-label');
+
+            if (!iconEl || !labelEl) return;
+
+            if (pref === null) {
+                // Auto mode
+                iconEl.textContent = current === 'light' ? '☀️' : '🌙';
+                labelEl.textContent = 'Auto';
+            } else if (pref === 'light') {
+                iconEl.textContent = '☀️';
+                labelEl.textContent = 'Light';
+            } else {
+                iconEl.textContent = '🌙';
+                labelEl.textContent = 'Dark';
+            }
+        }
+
+        // Initialize theme toggle display on page load
+        document.addEventListener('DOMContentLoaded', updateThemeToggle);
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

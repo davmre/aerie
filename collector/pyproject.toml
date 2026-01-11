@@ -1,0 +1,45 @@
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+
+# Include all Python files in collector
+include = ["*.py", "tests/*.py"]
+
+# Exclude cache directories
+exclude = ["**/__pycache__"]
+
+# Report missing imports (helps catch typos)
+reportMissingImports = true
+
+# These are useful for catching real bugs
+reportUnusedVariable = true
+reportDuplicateImport = true
+reportInvalidTypeForm = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+    "RUF",    # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "SIM105", # contextlib.suppress (try-except-pass is more explicit)
+    "SIM108", # ternary operator (sometimes less readable)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["database", "modes", "extractors", "prefilters"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

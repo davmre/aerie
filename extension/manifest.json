@@ -1,17 +1,32 @@
 {
   "manifest_version": 2,
   "name": "Aerie Tweet Collector",
-  "version": "0.1.0",
-  "description": "Captures tweets from Twitter's API for local filtering",
+  "version": "0.3.0",
+  "description": "Captures tweets from Twitter's API and filters your feed",
   "permissions": [
     "webRequest",
     "webRequestBlocking",
+    "storage",
     "*://*.twitter.com/*",
-    "*://*.x.com/*"
+    "*://*.x.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "scripts": ["background.js"],
     "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.twitter.com/*", "*://*.x.com/*"],
+      "css": ["content.css"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
   },
   "browser_specific_settings": {
     "gecko": {

@@ -1,0 +1,730 @@
+{% extends "base.html" %}
+
+{% block title %}Modes - Aerie{% endblock %}
+
+{% block content %}
+<div class="modes-header">
+    <h2>Classification Modes</h2>
+    <button class="btn btn-primary" onclick="showCreateModal()">+ New Mode</button>
+</div>
+
+<div id="modes-list">
+    <div class="loading">Loading modes...</div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div id="mode-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">Create Mode</h3>
+            <button class="modal-close" onclick="hideModal()">&times;</button>
+        </div>
+        <form id="mode-form">
+            <div class="form-group">
+                <label for="mode-id">ID <span class="required">*</span></label>
+                <input type="text" id="mode-id" name="id" required
+                       pattern="[a-z0-9_]+" placeholder="e.g., ml_focus">
+                <small>Lowercase letters, numbers, underscores only</small>
+            </div>
+
+            <div class="form-group">
+                <label for="mode-name">Display Name <span class="required">*</span></label>
+                <input type="text" id="mode-name" name="name" required placeholder="e.g., ML Focus">
+            </div>
+
+            <div class="form-group">
+                <label for="mode-prompt">Prompt <span class="required">*</span></label>
+                <select id="mode-prompt" name="prompt_id" required></select>
+            </div>
+
+            <div class="form-group">
+                <label for="mode-extractor">Extractor <span class="required">*</span></label>
+                <select id="mode-extractor" name="extractor" required
+                        onchange="updateExtractorConfig()"></select>
+                <small id="extractor-description"></small>
+            </div>
+
+            <div id="extractor-config-container" class="config-container" style="display: none;"></div>
+
+            <div class="form-group">
+                <label for="mode-prefilter">Prefilter (optional)</label>
+                <select id="mode-prefilter" name="prefilter"
+                        onchange="updatePrefilterConfig()">
+                    <option value="">None</option>
+                </select>
+                <small id="prefilter-description"></small>
+            </div>
+
+            <div id="prefilter-config-container" class="config-container" style="display: none;"></div>
+
+            <div class="form-group">
+                <label for="mode-description">Description</label>
+                <textarea id="mode-description" name="description" rows="2" placeholder="Optional description"></textarea>
+            </div>
+
+            <div class="form-actions">
+                <button type="button" class="btn" onclick="hideModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="submit-btn">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="modal" style="display: none;">
+    <div class="modal-content modal-small">
+        <h3>Delete Mode</h3>
+        <p id="delete-message"></p>
+        <div class="form-actions">
+            <button class="btn" onclick="hideDeleteModal()">Cancel</button>
+            <button class="btn btn-danger" id="confirm-delete-btn">Delete</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+// State
+let modes = [];
+let extractors = [];
+let prefilters = [];
+let prompts = [];
+let modeStats = {};  // mode_id -> stats object
+let editingModeId = null;
+
+// Load initial data
+async function loadData() {
+    try {
+        const [modesRes, extractorsRes, prefiltersRes, promptsRes] = await Promise.all([
+            fetch('/api/modes').then(r => r.json()),
+            fetch('/api/extractors').then(r => r.json()),
+            fetch('/api/prefilters').then(r => r.json()),
+            fetch('/api/prompts').then(r => r.json())
+        ]);
+
+        modes = modesRes.modes;
+        extractors = extractorsRes.extractors;
+        prefilters = prefiltersRes.prefilters;
+        prompts = promptsRes.prompts;
+
+        populateDropdowns();
+        renderModes();
+
+        // Fetch stats for each mode asynchronously
+        loadModeStats();
+    } catch (err) {
+        document.getElementById('modes-list').innerHTML =
+            `<div class="loading">Error loading data: ${err.message}</div>`;
+    }
+}
+
+// Fetch stats for all modes and update display
+async function loadModeStats() {
+    const statsPromises = modes.map(mode =>
+        fetchStats(mode.id).then(stats => ({ id: mode.id, stats }))
+    );
+    const results = await Promise.all(statsPromises);
+    for (const { id, stats } of results) {
+        if (!stats.error) {
+            modeStats[id] = stats;
+            // Update the stats display for this mode
+            const el = document.getElementById(`stats-${id}`);
+            if (el) {
+                el.textContent = `${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+            }
+        }
+    }
+}
+
+function populateDropdowns() {
+    // Prompts
+    const promptSelect = document.getElementById('mode-prompt');
+    promptSelect.innerHTML = prompts.map(p =>
+        `<option value="${escapeHtml(p.id)}">${escapeHtml(p.id)}</option>`
+    ).join('');
+
+    // Extractors
+    const extractorSelect = document.getElementById('mode-extractor');
+    extractorSelect.innerHTML = extractors.map(e =>
+        `<option value="${escapeHtml(e.name)}">${escapeHtml(e.name)}</option>`
+    ).join('');
+
+    // Prefilters
+    const prefilterSelect = document.getElementById('mode-prefilter');
+    prefilterSelect.innerHTML = '<option value="">None</option>' +
+        prefilters.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
+}
+
+function renderModes() {
+    const container = document.getElementById('modes-list');
+
+    if (modes.length === 0) {
+        container.innerHTML = '<div class="loading">No modes configured</div>';
+        return;
+    }
+
+    container.innerHTML = modes.map(mode => `
+        <div class="mode-card ${mode.is_protected ? 'protected' : ''}">
+            <div class="mode-header">
+                <div>
+                    <span class="mode-name">${escapeHtml(mode.name)}</span>
+                    <span class="mode-id">${escapeHtml(mode.id)}</span>
+                    ${mode.is_protected ? '<span class="badge badge-default">default</span>' : ''}
+                </div>
+                <div class="mode-actions">
+                    <button class="btn btn-small" onclick="editMode('${escapeHtml(mode.id)}')">Edit</button>
+                    ${!mode.is_protected ? `
+                        <button class="btn btn-small btn-danger"
+                                onclick="confirmDelete('${escapeHtml(mode.id)}', ${mode.human_label_count || 0})">Delete</button>
+                    ` : ''}
+                </div>
+            </div>
+            <div class="mode-stats-row" id="stats-${escapeHtml(mode.id)}">Loading stats...</div>
+            <div class="mode-details">
+                <div><strong>Prompt:</strong> ${escapeHtml(mode.prompt_id)}</div>
+                <div><strong>Extractor:</strong> ${escapeHtml(mode.extractor)}
+                    ${mode.extractor_config ? `<code>${escapeHtml(JSON.stringify(mode.extractor_config))}</code>` : ''}</div>
+                ${mode.prefilter ? `<div><strong>Prefilter:</strong> ${escapeHtml(mode.prefilter)}
+                    ${mode.prefilter_config ? `<code>${escapeHtml(JSON.stringify(mode.prefilter_config))}</code>` : ''}</div>` : ''}
+                ${mode.description ? `<div class="mode-description">${escapeHtml(mode.description)}</div>` : ''}
+                ${mode.human_label_count > 0 ?
+                    `<div class="mode-labels">${mode.human_label_count} human labels</div>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+// Dynamic config form generation
+function updateExtractorConfig() {
+    const select = document.getElementById('mode-extractor');
+    const container = document.getElementById('extractor-config-container');
+    const descEl = document.getElementById('extractor-description');
+
+    const extractor = extractors.find(e => e.name === select.value);
+    descEl.textContent = extractor?.description || '';
+
+    if (extractor?.type === 'factory' && extractor.params) {
+        container.innerHTML = '<div class="config-title">Extractor Configuration</div>' +
+            renderConfigFields('extractor', extractor.params);
+        container.style.display = 'block';
+    } else {
+        container.innerHTML = '';
+        container.style.display = 'none';
+    }
+}
+
+function updatePrefilterConfig() {
+    const select = document.getElementById('mode-prefilter');
+    const container = document.getElementById('prefilter-config-container');
+    const descEl = document.getElementById('prefilter-description');
+
+    const prefilter = prefilters.find(p => p.name === select.value);
+    descEl.textContent = prefilter?.description || '';
+
+    if (prefilter?.type === 'factory' && prefilter.params) {
+        container.innerHTML = '<div class="config-title">Prefilter Configuration</div>' +
+            renderConfigFields('prefilter', prefilter.params);
+        container.style.display = 'block';
+    } else {
+        container.innerHTML = '';
+        container.style.display = 'none';
+    }
+}
+
+function renderConfigFields(prefix, params) {
+    return Object.entries(params).map(([name, spec]) => {
+        const inputId = `${prefix}-config-${name}`;
+        let defaultVal = '';
+        if (spec.default !== undefined) {
+            defaultVal = typeof spec.default === 'object' ? JSON.stringify(spec.default) : spec.default;
+        }
+
+        let input;
+        if (spec.type === 'array') {
+            input = `<input type="text" id="${inputId}" placeholder='["item1", "item2"]' value='${escapeHtml(String(defaultVal))}'>`;
+        } else if (spec.type === 'object') {
+            input = `<input type="text" id="${inputId}" placeholder='${escapeHtml(String(defaultVal))}' value='${escapeHtml(String(defaultVal))}'>`;
+        } else if (spec.type === 'number') {
+            input = `<input type="number" id="${inputId}" value="${defaultVal}"
+                           ${spec.min !== undefined ? `min="${spec.min}"` : ''}
+                           ${spec.max !== undefined ? `max="${spec.max}"` : ''}>`;
+        } else {
+            input = `<input type="text" id="${inputId}" value="${escapeHtml(String(defaultVal))}">`;
+        }
+
+        return `
+            <div class="form-group config-field">
+                <label for="${inputId}">${escapeHtml(name)} ${spec.required ? '<span class="required">*</span>' : ''}</label>
+                ${input}
+                <small>${escapeHtml(spec.description || '')}</small>
+            </div>
+        `;
+    }).join('');
+}
+
+function gatherConfig(prefix, params) {
+    if (!params) return null;
+
+    const config = {};
+    let hasValues = false;
+
+    for (const [name, spec] of Object.entries(params)) {
+        const input = document.getElementById(`${prefix}-config-${name}`);
+        if (!input) continue;
+
+        let value = input.value.trim();
+        if (!value && !spec.required) continue;
+
+        try {
+            if (spec.type === 'array' || spec.type === 'object') {
+                if (value) {
+                    value = JSON.parse(value);
+                } else {
+                    value = spec.type === 'array' ? [] : {};
+                }
+            } else if (spec.type === 'number') {
+                value = parseFloat(value);
+                if (isNaN(value)) continue;
+            }
+            config[name] = value;
+            hasValues = true;
+        } catch (e) {
+            console.error(`Invalid config for ${name}:`, e);
+            alert(`Invalid JSON for ${name}`);
+            return null;
+        }
+    }
+
+    return hasValues ? config : null;
+}
+
+// Modal handling
+function showCreateModal() {
+    editingModeId = null;
+    document.getElementById('modal-title').textContent = 'Create Mode';
+    document.getElementById('submit-btn').textContent = 'Create';
+    document.getElementById('mode-id').disabled = false;
+    document.getElementById('mode-form').reset();
+    updateExtractorConfig();
+    updatePrefilterConfig();
+    document.getElementById('mode-modal').style.display = 'flex';
+}
+
+async function editMode(modeId) {
+    editingModeId = modeId;
+    const mode = modes.find(m => m.id === modeId);
+
+    document.getElementById('modal-title').textContent = 'Edit Mode';
+    document.getElementById('submit-btn').textContent = 'Save';
+    document.getElementById('mode-id').value = mode.id;
+    document.getElementById('mode-id').disabled = true;
+    document.getElementById('mode-name').value = mode.name;
+    document.getElementById('mode-prompt').value = mode.prompt_id;
+    document.getElementById('mode-extractor').value = mode.extractor;
+    document.getElementById('mode-prefilter').value = mode.prefilter || '';
+    document.getElementById('mode-description').value = mode.description || '';
+
+    updateExtractorConfig();
+    updatePrefilterConfig();
+
+    // Fill in config values
+    if (mode.extractor_config) {
+        for (const [key, value] of Object.entries(mode.extractor_config)) {
+            const input = document.getElementById(`extractor-config-${key}`);
+            if (input) input.value = typeof value === 'object' ? JSON.stringify(value) : value;
+        }
+    }
+    if (mode.prefilter_config) {
+        for (const [key, value] of Object.entries(mode.prefilter_config)) {
+            const input = document.getElementById(`prefilter-config-${key}`);
+            if (input) input.value = typeof value === 'object' ? JSON.stringify(value) : value;
+        }
+    }
+
+    document.getElementById('mode-modal').style.display = 'flex';
+}
+
+function hideModal() {
+    document.getElementById('mode-modal').style.display = 'none';
+}
+
+// Form submission
+document.getElementById('mode-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const extractorName = document.getElementById('mode-extractor').value;
+    const prefilterName = document.getElementById('mode-prefilter').value;
+    const extractor = extractors.find(ex => ex.name === extractorName);
+    const prefilter = prefilters.find(pf => pf.name === prefilterName);
+
+    const extractorConfig = gatherConfig('extractor', extractor?.params);
+    const prefilterConfig = gatherConfig('prefilter', prefilter?.params);
+
+    // Check if gatherConfig returned null due to error
+    if (extractor?.params && extractorConfig === null) return;
+    if (prefilter?.params && prefilterConfig === null) return;
+
+    const data = {
+        id: document.getElementById('mode-id').value,
+        name: document.getElementById('mode-name').value,
+        prompt_id: document.getElementById('mode-prompt').value,
+        extractor: extractorName,
+        extractor_config: extractorConfig,
+        prefilter: prefilterName || null,
+        prefilter_config: prefilterConfig,
+        description: document.getElementById('mode-description').value || null
+    };
+
+    try {
+        const method = editingModeId ? 'PUT' : 'POST';
+        const url = editingModeId ? `/api/modes/${editingModeId}` : '/api/modes';
+
+        const res = await fetch(url, {
+            method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+        if (!res.ok) {
+            alert(result.error || 'Failed to save mode');
+            return;
+        }
+
+        hideModal();
+        loadData();
+    } catch (err) {
+        alert('Error saving mode: ' + err.message);
+    }
+});
+
+// Delete handling
+let deletingModeId = null;
+
+function confirmDelete(modeId, labelCount) {
+    deletingModeId = modeId;
+    const msg = labelCount > 0
+        ? `This mode has ${labelCount} human labels. Deleting will also remove these labels. Are you sure?`
+        : `Are you sure you want to delete mode "${modeId}"?`;
+    document.getElementById('delete-message').textContent = msg;
+    document.getElementById('delete-modal').style.display = 'flex';
+}
+
+function hideDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+    deletingModeId = null;
+}
+
+document.getElementById('confirm-delete-btn').addEventListener('click', async () => {
+    if (!deletingModeId) return;
+
+    try {
+        const res = await fetch(`/api/modes/${deletingModeId}?force=true`, {method: 'DELETE'});
+        if (!res.ok) {
+            const result = await res.json();
+            alert(result.error || 'Failed to delete mode');
+            return;
+        }
+        hideDeleteModal();
+        loadData();
+    } catch (err) {
+        alert('Error deleting mode: ' + err.message);
+    }
+});
+
+// Close modals on escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        hideModal();
+        hideDeleteModal();
+    }
+});
+
+// Close modals on backdrop click
+document.querySelectorAll('.modal').forEach(modal => {
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            hideModal();
+            hideDeleteModal();
+        }
+    });
+});
+
+// Initial load
+loadData();
+</script>
+{% endblock %}
+
+{% block extra_styles %}
+<style>
+.modes-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.modes-header h2 {
+    margin: 0;
+}
+
+.mode-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-secondary);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.mode-card.protected {
+    border-color: var(--accent-protected);
+}
+
+.mode-card .mode-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.mode-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-heading);
+}
+
+.mode-id {
+    color: var(--text-tertiary);
+    margin-left: 8px;
+    font-family: monospace;
+}
+
+.badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-left: 8px;
+}
+
+.badge-default {
+    background: var(--accent-protected);
+    color: var(--accent-pending-text);
+}
+
+.mode-stats-row {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    padding: 8px 0;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border-secondary);
+}
+
+.mode-details {
+    font-size: 0.9rem;
+    color: var(--text-context);
+}
+
+.mode-details div {
+    margin-bottom: 4px;
+}
+
+.mode-details code {
+    background: var(--bg-nested);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    margin-left: 4px;
+}
+
+.mode-description {
+    color: var(--text-secondary);
+    font-style: italic;
+    margin-top: 8px !important;
+}
+
+.mode-labels {
+    color: var(--accent);
+    margin-top: 8px !important;
+}
+
+.mode-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Buttons - override base styles for this page */
+.modes-header .btn,
+.mode-actions .btn,
+.form-actions .btn {
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-tertiary);
+    background: var(--bg-button);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+
+.modes-header .btn:hover,
+.mode-actions .btn:hover,
+.form-actions .btn:hover {
+    background: var(--bg-button-hover);
+}
+
+.btn-small {
+    padding: 4px 10px;
+    font-size: 0.85rem;
+}
+
+.btn-primary {
+    background: var(--btn-primary-bg);
+    border-color: var(--btn-primary-border);
+}
+
+.btn-primary:hover {
+    background: var(--btn-primary-hover);
+}
+
+.btn-danger {
+    background: var(--btn-danger-bg);
+    border-color: var(--btn-danger-border);
+}
+
+.btn-danger:hover {
+    background: var(--btn-danger-hover);
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--bg-modal-overlay);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: var(--bg-input);
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    padding: 24px;
+    width: 100%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-small {
+    max-width: 400px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.modal-header h3 {
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 1.5rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+}
+
+.modal-close:hover {
+    color: var(--text-heading);
+}
+
+/* Form */
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--text-quoted);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-nested);
+    border: 1px solid var(--border-primary);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+.form-group small {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-tertiary);
+    font-size: 0.8rem;
+}
+
+.required {
+    color: var(--accent-filtered-text);
+}
+
+.config-container {
+    background: var(--bg-nested);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 16px;
+}
+
+.config-title {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    font-weight: 500;
+}
+
+.config-field {
+    margin-bottom: 12px;
+}
+
+.config-field:last-child {
+    margin-bottom: 0;
+}
+
+.form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-primary);
+}
+
+.loading {
+    text-align: center;
+    color: var(--text-tertiary);
+    padding: 40px;
+}
+</style>
+{% endblock %}

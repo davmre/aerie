@@ -1,22 +1,49 @@
 // Aerie Tweet Collector - Background Script
 // Intercepts Twitter API responses using webRequest API (invisible to page JavaScript)
 
-const COLLECTOR_URL = "http://localhost:8080/tweets";
+// Default settings
+const DEFAULTS = {
+  backendUrl: "http://localhost:8080",
+  mode: "default",
+  pollInterval: 3000,
+  pendingOpacity: 0.02,
+  filteredOpacity: 0.02
+};
 
-// Twitter API endpoints that contain timeline data
+// Current settings (loaded from storage)
+let settings = { ...DEFAULTS };
+
+// Load settings on startup
+async function loadSettings() {
+  settings = await browser.storage.local.get(DEFAULTS);
+  console.log("[Aerie] Settings loaded:", settings.backendUrl);
+}
+
+// Listen for settings changes
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === "local") {
+    for (const [key, { newValue }] of Object.entries(changes)) {
+      if (key in settings) {
+        settings[key] = newValue;
+      }
+    }
+    console.log("[Aerie] Settings updated:", settings.backendUrl);
+  }
+});
+
+// Initialize settings
+loadSettings();
+
+// Twitter API endpoints that contain timeline/tweet data
 const TIMELINE_PATTERNS = [
   /\/graphql\/[^/]+\/Home(Timeline|LatestTimeline)/,
   /\/graphql\/[^/]+\/UserTweets/,
   /\/graphql\/[^/]+\/TweetDetail/,
-  /\/2\/timeline\/home/,
 ];
 
 function isTimelineEndpoint(url) {
   return TIMELINE_PATTERNS.some(pattern => pattern.test(url));
 }
-
-// Track pending responses (url -> {chunks, encoding})
-const pendingResponses = new Map();
 
 browser.webRequest.onHeadersReceived.addListener(
   (details) => {
@@ -24,18 +51,8 @@ browser.webRequest.onHeadersReceived.addListener(
       return;
     }
 
-    // Find content-encoding header
-    let encoding = "identity";
-    for (const header of details.responseHeaders || []) {
-      if (header.name.toLowerCase() === "content-encoding") {
-        encoding = header.value.toLowerCase();
-        break;
-      }
-    }
-
-    console.log(`[Aerie] Intercepting timeline response: ${details.url} (encoding: ${encoding})`);
-
     // Use filterResponseData to read the response body
+    // Note: Firefox gives us already-decompressed data
     const filter = browser.webRequest.filterResponseData(details.requestId);
     const chunks = [];
 
@@ -57,22 +74,13 @@ browser.webRequest.onHeadersReceived.addListener(
       }
 
       try {
-        // Decompress if needed
-        let text;
-        if (encoding === "gzip" || encoding === "deflate" || encoding === "br") {
-          const decompressed = await decompress(combined, encoding);
-          text = new TextDecoder().decode(decompressed);
-        } else {
-          text = new TextDecoder().decode(combined);
-        }
-
-        // Parse JSON and extract tweets
+        const text = new TextDecoder().decode(combined);
         const data = JSON.parse(text);
-        const tweets = extractTweets(data);
+        const { tweets, retweets } = extractTweetsAndRetweets(data);
 
-        if (tweets.length > 0) {
-          console.log(`[Aerie] Extracted ${tweets.length} tweets, sending to collector`);
-          sendToCollector(tweets);
+        if (tweets.length > 0 || retweets.length > 0) {
+          console.log(`[Aerie] Captured ${tweets.length} tweets, ${retweets.length} retweets`);
+          sendToCollector(tweets, retweets);
         }
       } catch (err) {
         console.error("[Aerie] Error processing response:", err);
@@ -87,86 +95,173 @@ browser.webRequest.onHeadersReceived.addListener(
   ["blocking", "responseHeaders"]
 );
 
-// Decompress response body
-async function decompress(data, encoding) {
-  let decompressionStream;
+// Extract tweet objects from Twitter's nested API response
+// Returns {tweets: [], retweets: []} where retweets link retweeters to original tweets
+function extractTweetsAndRetweets(data) {
+  const tweets = [];
+  const retweets = [];
+  const seenTweets = new Set();
+  const seenRetweets = new Set(); // "originalId:retweeterUsername"
 
-  if (encoding === "gzip") {
-    decompressionStream = new DecompressionStream("gzip");
-  } else if (encoding === "deflate") {
-    decompressionStream = new DecompressionStream("deflate");
-  } else if (encoding === "br") {
-    // Brotli - DecompressionStream doesn't support it in all browsers
-    // Fall back to trying gzip, or return as-is
-    try {
-      decompressionStream = new DecompressionStream("gzip");
-    } catch {
-      console.warn("[Aerie] Brotli decompression not supported, trying raw");
-      return data;
+  function processTweet(tweetObj, contextInfo) {
+    const legacy = tweetObj.legacy || tweetObj;
+
+    // Check if this is a retweet
+    const retweetedResult = legacy.retweeted_status_result?.result;
+    if (retweetedResult) {
+      // This is a retweet - extract the original tweet and create a retweet record
+
+      // Get retweeter info from the current tweet
+      const retweeterResult = tweetObj.core?.user_results?.result || tweetObj.user_results?.result || {};
+      const retweeterCore = retweeterResult.core || {};
+      const retweeterLegacy = retweeterResult.legacy || {};
+
+      const retweeterUsername = retweeterCore.screen_name || retweeterLegacy.screen_name;
+      const retweeterDisplayName = retweeterCore.name || retweeterLegacy.name;
+      const retweeterUserId = retweeterResult.rest_id || retweeterLegacy.id_str;
+
+      // Normalize and store the original tweet
+      const originalTweet = normalizeTweet(retweetedResult, { ...contextInfo, isPromoted: false });
+      if (originalTweet && !seenTweets.has(originalTweet.id)) {
+        seenTweets.add(originalTweet.id);
+        tweets.push(originalTweet);
+      }
+
+      // Create retweet record if we have the original and retweeter info
+      if (originalTweet && retweeterUsername) {
+        const rtKey = `${originalTweet.id}:${retweeterUsername}`;
+        if (!seenRetweets.has(rtKey)) {
+          seenRetweets.add(rtKey);
+          retweets.push({
+            original_tweet_id: originalTweet.id,
+            retweeter_user_id: retweeterUserId,
+            retweeter_username: retweeterUsername,
+            retweeter_display_name: retweeterDisplayName,
+            retweeted_at: legacy.created_at || null,
+            captured_at: new Date().toISOString(),
+          });
+        }
+      }
+
+      // Don't add the "RT @..." wrapper tweet - we only want the original
+      return;
     }
-  } else {
-    return data;
+
+    // Not a retweet - process normally
+    const tweet = normalizeTweet(tweetObj, contextInfo);
+    if (tweet && !seenTweets.has(tweet.id)) {
+      seenTweets.add(tweet.id);
+      tweets.push(tweet);
+    }
   }
 
-  const stream = new Blob([data]).stream().pipeThrough(decompressionStream);
-  const response = new Response(stream);
-  return new Uint8Array(await response.arrayBuffer());
-}
-
-// Extract tweet objects from Twitter's nested API response
-function extractTweets(data) {
-  const tweets = [];
-  const seen = new Set();
-
-  function traverse(obj) {
+  function traverse(obj, parent = null, grandparent = null) {
     if (!obj || typeof obj !== "object") return;
 
-    // Twitter wraps tweets in various structures - look for the telltale signs
-    if (obj.__typename === "Tweet" || obj.legacy?.full_text !== undefined) {
-      const tweet = normalizeTweet(obj);
-      if (tweet && !seen.has(tweet.id)) {
-        seen.add(tweet.id);
-        tweets.push(tweet);
+    // Check for promoted content indicators at the entry/item level
+    const isPromoted = !!(
+      obj.promotedMetadata ||
+      obj.advertiser_results ||
+      parent?.promotedMetadata ||
+      parent?.advertiser_results ||
+      obj.entryId?.includes("promoted") ||
+      obj.entryId?.includes("cursor-ad") ||
+      parent?.entryId?.includes("promoted")
+    );
+
+    const contextInfo = {
+      isPromoted,
+      entryId: obj.entryId || parent?.entryId,
+      entryType: obj.__typename || obj.entryType,
+    };
+
+    // Look for tweet_results.result pattern (most reliable)
+    if (obj.tweet_results?.result) {
+      const tweetObj = obj.tweet_results.result;
+      if (tweetObj.__typename === "Tweet" || tweetObj.legacy?.full_text !== undefined) {
+        processTweet(tweetObj, contextInfo);
+      }
+    }
+
+    // Also look for direct Tweet objects (fallback)
+    if (obj.__typename === "Tweet" && obj.legacy?.full_text !== undefined) {
+      if (obj.core?.user_results || obj.user_results) {
+        processTweet(obj, contextInfo);
       }
     }
 
     // Recurse into arrays and objects
     if (Array.isArray(obj)) {
       for (const item of obj) {
-        traverse(item);
+        traverse(item, obj, parent);
       }
     } else {
       for (const value of Object.values(obj)) {
-        traverse(value);
+        traverse(value, obj, parent);
       }
     }
   }
 
   traverse(data);
-  return tweets;
+  return { tweets, retweets };
 }
 
 // Normalize a tweet object into our standard schema
-function normalizeTweet(raw) {
+function normalizeTweet(raw, contextInfo = {}) {
   try {
     // Handle both direct tweet objects and wrapped ones
     const legacy = raw.legacy || raw;
-    const core = raw.core?.user_results?.result || {};
-    const userLegacy = core.legacy || {};
+
+    // Extract full text - prefer note_tweet for long-form content
+    const noteTweetText = raw.note_tweet?.note_tweet_results?.result?.text;
+    const fullText = noteTweetText || legacy.full_text || legacy.text || "";
+
+    // Check if this is a promoted/ad tweet
+    const isPromoted = contextInfo.isPromoted || false;
+
+    // Twitter has multiple paths to user data - try them all
+    const userResult =
+      raw.core?.user_results?.result ||  // Most common path
+      raw.user_results?.result ||         // Alternative path
+      raw.author?.result ||               // Another alternative
+      {};
+
+    // Twitter now nests screen_name/name in userResult.core (not userResult.legacy)
+    const userCore = userResult.core || {};
+    const userLegacy = userResult.legacy || {};
+
+    // Sometimes user is directly on legacy
+    const legacyUser = legacy.user || {};
 
     // Extract tweet ID - could be in various places
     const id = raw.rest_id || legacy.id_str || legacy.id;
     if (!id) return null;
 
+    // Try multiple sources for author info - userCore is the new primary location
+    const authorUsername = userCore.screen_name || userLegacy.screen_name || legacyUser.screen_name || legacy.user_screen_name || null;
+    const authorDisplayName = userCore.name || userLegacy.name || legacyUser.name || legacy.user_name || null;
+    const authorId = userResult.rest_id || userLegacy.id_str || legacyUser.id_str || legacy.user_id_str || null;
+    const authorVerified = userLegacy.verified || legacyUser.verified || false;
+
+    // Additional author info useful for classification
+    const authorBio = userResult.profile_bio?.description || userLegacy.description || null;
+    const authorFollowing = userResult.relationship_perspectives?.following ?? null;
+    const authorBlueVerified = userResult.is_blue_verified ?? null;
+    const authorFollowersCount = userLegacy.followers_count ?? null;
+
     return {
       id: String(id),
-      text: legacy.full_text || legacy.text || "",
+      text: fullText,
       created_at: legacy.created_at || null,
       author: {
-        id: core.rest_id || userLegacy.id_str || legacy.user_id_str || null,
-        username: userLegacy.screen_name || null,
-        display_name: userLegacy.name || null,
-        verified: userLegacy.verified || false,
+        id: authorId,
+        username: authorUsername,
+        display_name: authorDisplayName,
+        verified: authorVerified,
+        blue_verified: authorBlueVerified,
+        bio: authorBio,
+        following: authorFollowing,
+        followers_count: authorFollowersCount,
       },
       metrics: {
         retweet_count: legacy.retweet_count || 0,
@@ -181,6 +276,7 @@ function normalizeTweet(raw) {
       },
       is_retweet: !!legacy.retweeted_status_result,
       is_quote: !!raw.quoted_status_result,
+      is_promoted: isPromoted,
       quoted_tweet_id: raw.quoted_status_result?.result?.rest_id ||
                        legacy.quoted_status_id_str || null,
       media: extractMedia(legacy.extended_entities || legacy.entities),
@@ -216,26 +312,62 @@ function extractUrls(entities) {
   }));
 }
 
-// Send extracted tweets to local collector service
-async function sendToCollector(tweets) {
+// Send extracted tweets and retweets to local collector service
+async function sendToCollector(tweets, retweets = []) {
   try {
-    const response = await fetch(COLLECTOR_URL, {
+    const collectorUrl = `${settings.backendUrl}/tweets`;
+    const response = await fetch(collectorUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ tweets }),
+      body: JSON.stringify({ tweets, retweets }),
     });
 
     if (!response.ok) {
       console.error(`[Aerie] Collector returned ${response.status}`);
     } else {
       const result = await response.json();
-      console.log(`[Aerie] Collector response:`, result);
+      const rtInfo = result.retweets_inserted !== undefined
+        ? `, ${result.retweets_inserted} retweets`
+        : '';
+      console.log(`[Aerie] Stored: ${result.inserted} new, ${result.duplicates} duplicates${rtInfo}`);
+
+      // Immediately check the captured tweets to trigger prefilter evaluation
+      // This ensures prefilter-only modes (like "all tweets") get instant decisions
+      if (tweets.length > 0) {
+        const tweetIds = tweets.map(t => t.id);
+        checkTweetsForPrefilter(tweetIds);
+      }
     }
   } catch (err) {
     // Collector might not be running - that's okay, log and continue
-    console.warn(`[Aerie] Could not reach collector at ${COLLECTOR_URL}:`, err.message);
+    console.warn(`[Aerie] Could not reach collector: ${err.message}`);
+  }
+}
+
+// Check tweets to trigger prefilter evaluation (non-blocking)
+async function checkTweetsForPrefilter(tweetIds) {
+  try {
+    const checkUrl = `${settings.backendUrl}/tweets/check`;
+    const response = await fetch(checkUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids: tweetIds, mode: settings.mode }),
+    });
+
+    if (response.ok) {
+      const statuses = await response.json();
+      const approved = Object.values(statuses).filter(s => s === "approved").length;
+      const filtered = Object.values(statuses).filter(s => s === "filtered").length;
+      const pending = Object.values(statuses).filter(s => s === "pending").length;
+      console.log(`[Aerie] Prefilter check: ${approved} approved, ${filtered} filtered, ${pending} pending`);
+    }
+  } catch (err) {
+    // Non-critical, just log
+    console.warn(`[Aerie] Prefilter check failed: ${err.message}`);
   }
 }
 
