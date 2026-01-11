@@ -9,14 +9,15 @@ from tests.fixtures import (
 )
 
 
-class TestConversationClustering:
-    """Tests for the conversation clustering feature (group_conversations=true with status=approved)."""
+class TestLeafOnlyFiltering:
+    """Tests for the leaf_only parameter that collapses threads."""
 
-    def test_linear_thread_becomes_single_cluster(self, client, test_db):
+    def test_leaf_only_excludes_thread_ancestors(self, client, test_db):
         """
-        A linear thread A -> B -> C should become a single conversation cluster
-        with the full chain as primary_chain.
+        In a thread C -> B -> A, only C (the leaf) should be returned.
+        A and B should appear in C's thread_ancestors.
         """
+        # Create thread: A <- B <- C (C replies to B, B replies to A)
         tweets = [
             make_tweet(id="1", text="Tweet A"),
             make_tweet(id="2", text="Tweet B", reply_to_tweet_id="1"),
@@ -25,23 +26,23 @@ class TestConversationClustering:
         create_and_store_tweets(tweets, test_db)
         approve_tweets(["1", "2", "3"], test_db)
 
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=true")
+        # Query with leaf_only=true
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
         assert resp.status_code == 200
         data = resp.get_json()
 
-        # Should return conversations, not tweets
-        assert "conversations" in data
-        assert len(data["conversations"]) == 1
+        # Only C should appear as main tweet
+        assert len(data["tweets"]) == 1
+        assert data["tweets"][0]["id"] == "3"
 
-        # The primary chain should contain all three tweets in order
-        chain = data["conversations"][0]["primary_chain"]
-        assert len(chain) == 3
-        assert chain[0]["id"] == "1"  # Root first
-        assert chain[1]["id"] == "2"
-        assert chain[2]["id"] == "3"  # Leaf last
+        # C should have A and B as thread ancestors (oldest first)
+        ancestors = data["tweets"][0].get("thread_ancestors", [])
+        assert len(ancestors) == 2
+        assert ancestors[0]["id"] == "1"  # A (oldest)
+        assert ancestors[1]["id"] == "2"  # B
 
-    def test_independent_tweets_are_separate_clusters(self, client, test_db):
-        """Multiple independent tweets should each be their own cluster."""
+    def test_leaf_only_returns_all_leaf_tweets(self, client, test_db):
+        """Multiple independent tweets should all be returned."""
         tweets = [
             make_tweet(id="1", text="Independent A", author_username="user1"),
             make_tweet(id="2", text="Independent B", author_username="user2"),
@@ -50,164 +51,131 @@ class TestConversationClustering:
         create_and_store_tweets(tweets, test_db)
         approve_tweets(["1", "2", "3"], test_db)
 
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=true")
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
         assert resp.status_code == 200
         data = resp.get_json()
 
-        # Three separate clusters, each with a single tweet
-        assert len(data["conversations"]) == 3
-        for conv in data["conversations"]:
-            assert len(conv["primary_chain"]) == 1
+        # All three should be returned (no replies among them)
+        assert len(data["tweets"]) == 3
 
-    def test_fan_out_picks_longest_chain(self, client, test_db):
-        """
-        When multiple tweets reply to the same parent, pick the longest chain.
-        A <- B <- C  (length 3)
-        A <- D       (length 2)
-        Should show A -> B -> C as primary, with D as hidden reply.
-        """
-        tweets = [
-            make_tweet(id="A", text="Root"),
-            make_tweet(id="B", text="Reply B", reply_to_tweet_id="A"),
-            make_tweet(id="C", text="Reply C to B", reply_to_tweet_id="B"),
-            make_tweet(id="D", text="Reply D to A", reply_to_tweet_id="A"),
-        ]
-        create_and_store_tweets(tweets, test_db)
-        approve_tweets(["A", "B", "C", "D"], test_db)
-
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=true")
-        data = resp.get_json()
-
-        assert len(data["conversations"]) == 1
-        conv = data["conversations"][0]
-
-        # Primary chain should be A -> B -> C (longest)
-        chain_ids = [t["id"] for t in conv["primary_chain"]]
-        assert chain_ids == ["A", "B", "C"]
-
-        # D should be a hidden reply to A
-        assert conv["hidden_reply_counts"].get("A") == 1
-
-    def test_fan_out_equal_length_picks_by_engagement(self, client, test_db):
-        """
-        When chains are equal length, pick by highest engagement.
-        A <- B (B has 100 likes)
-        A <- C (C has 10 likes)
-        Should pick A -> B as primary.
-        """
-        tweets = [
-            make_tweet(id="A", text="Root"),
-            make_tweet(id="B", text="Popular reply", reply_to_tweet_id="A", like_count=100),
-            make_tweet(id="C", text="Less popular", reply_to_tweet_id="A", like_count=10),
-        ]
-        create_and_store_tweets(tweets, test_db)
-        approve_tweets(["A", "B", "C"], test_db)
-
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=true")
-        data = resp.get_json()
-
-        assert len(data["conversations"]) == 1
-        conv = data["conversations"][0]
-
-        # Primary chain should be A -> B (higher engagement)
-        chain_ids = [t["id"] for t in conv["primary_chain"]]
-        assert chain_ids == ["A", "B"]
-
-        # C should be hidden
-        assert conv["hidden_reply_counts"].get("A") == 1
-
-    def test_quoted_tweet_in_chain(self, client, test_db):
-        """Tweets in the chain should include their quoted tweets."""
-        tweets = [
-            make_tweet(id="Z", text="Quoted original"),
-            make_tweet(id="A", text="Quote tweet", quoted_tweet_id="Z"),
-        ]
-        create_and_store_tweets(tweets, test_db)
-        approve_tweets(["A"], test_db)  # Only approve A, not Z
-
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=true")
-        data = resp.get_json()
-
-        assert len(data["conversations"]) == 1
-        chain = data["conversations"][0]["primary_chain"]
-        assert len(chain) == 1
-        assert chain[0]["id"] == "A"
-        assert chain[0].get("quoted_tweet") is not None
-        assert chain[0]["quoted_tweet"]["id"] == "Z"
-
-
-class TestGroupConversationsFalse:
-    """Tests for when group_conversations=false (returns individual tweets)."""
-
-    def test_ungrouped_returns_all_tweets(self, client, test_db):
-        """When group_conversations=false, all tweets in thread are returned individually."""
+    def test_leaf_only_false_returns_all_tweets(self, client, test_db):
+        """When leaf_only=false, all tweets in thread are returned."""
         tweets = make_thread(base_id=100, length=3)
         create_and_store_tweets(tweets, test_db)
         approve_tweets(["100", "101", "102"], test_db)
 
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=false")
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=false")
         assert resp.status_code == 200
         data = resp.get_json()
 
-        # Should return tweets, not conversations
-        assert "tweets" in data
+        # All three tweets in the thread should be returned
         assert len(data["tweets"]) == 3
 
+    def test_leaf_only_excludes_quoted_tweets_without_own_thread(self, client, test_db):
+        """
+        A quoted tweet should be hidden if:
+        - It has no replies of its own (not a thread starter)
+        - It's only shown as context within the quoter
 
-class TestRepliesEndpoint:
-    """Tests for the /api/ui/tweet/<id>/replies endpoint."""
-
-    def test_get_direct_replies(self, client, test_db):
-        """Should return the tweet and its direct approved replies."""
+        Quote: A quotes Z, where Z is standalone -> only A is shown
+        """
         tweets = [
-            make_tweet(id="A", text="Parent"),
-            make_tweet(id="B", text="Reply 1", reply_to_tweet_id="A"),
-            make_tweet(id="C", text="Reply 2", reply_to_tweet_id="A"),
-            make_tweet(id="D", text="Reply to B", reply_to_tweet_id="B"),  # Not direct
+            make_tweet(id="Z", text="Original standalone tweet"),
+            make_tweet(id="A", text="Quote with commentary", quoted_tweet_id="Z"),
         ]
         create_and_store_tweets(tweets, test_db)
-        approve_tweets(["A", "B", "C", "D"], test_db)
+        approve_tweets(["Z", "A"], test_db)
 
-        resp = client.get("/api/ui/tweet/A/replies?mode=default")
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
         assert resp.status_code == 200
         data = resp.get_json()
 
-        # Should have parent tweet A
-        assert data["tweet"]["id"] == "A"
+        # Only A should appear (Z is just context)
+        assert len(data["tweets"]) == 1
+        assert data["tweets"][0]["id"] == "A"
 
-        # Should have direct replies B and C, but not D
-        reply_ids = {r["id"] for r in data["replies"]}
-        assert reply_ids == {"B", "C"}
+        # A should have Z as quoted_tweet
+        assert data["tweets"][0].get("quoted_tweet") is not None
+        assert data["tweets"][0]["quoted_tweet"]["id"] == "Z"
 
-    def test_replies_include_nested_reply_count(self, client, test_db):
-        """Replies should include count of their own approved replies."""
+    def test_leaf_only_shows_quoted_tweet_with_own_thread(self, client, test_db):
+        """
+        A quoted tweet should be shown if it has its own thread/replies.
+
+        If Z has replies (Z <- Y), Z is a conversation starter and should
+        be shown separately, not just as context.
+        """
         tweets = [
-            make_tweet(id="A", text="Parent"),
-            make_tweet(id="B", text="Reply with children", reply_to_tweet_id="A"),
-            make_tweet(id="C", text="Reply without children", reply_to_tweet_id="A"),
-            make_tweet(id="D", text="Reply to B", reply_to_tweet_id="B"),
-            make_tweet(id="E", text="Another reply to B", reply_to_tweet_id="B"),
+            make_tweet(id="Z", text="Original tweet with discussion"),
+            make_tweet(id="Y", text="Reply to Z", reply_to_tweet_id="Z"),
+            make_tweet(id="A", text="Quote of Z", quoted_tweet_id="Z"),
         ]
         create_and_store_tweets(tweets, test_db)
-        approve_tweets(["A", "B", "C", "D", "E"], test_db)
+        approve_tweets(["Z", "Y", "A"], test_db)
 
-        resp = client.get("/api/ui/tweet/A/replies?mode=default")
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
+        assert resp.status_code == 200
         data = resp.get_json()
 
-        # Find B and C in replies
-        reply_b = next(r for r in data["replies"] if r["id"] == "B")
-        reply_c = next(r for r in data["replies"] if r["id"] == "C")
+        # Both Y (leaf of Z's thread) and A (quoter) should appear
+        ids = {t["id"] for t in data["tweets"]}
+        assert ids == {"Y", "A"}
 
-        # B should have 2 nested replies
-        assert reply_b["reply_count_approved"] == 2
 
-        # C should have 0 nested replies
-        assert reply_c["reply_count_approved"] == 0
+class TestThreadContext:
+    """Tests for thread ancestor context in API responses."""
 
-    def test_replies_not_found(self, client, test_db):
-        """Should return 404 for non-existent tweet."""
-        resp = client.get("/api/ui/tweet/nonexistent/replies?mode=default")
-        assert resp.status_code == 404
+    def test_reply_includes_thread_ancestors(self, client, test_db):
+        """A reply tweet should include its ancestors in thread_ancestors."""
+        tweets = [
+            make_tweet(id="1", text="Root"),
+            make_tweet(id="2", text="Reply", reply_to_tweet_id="1"),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["1", "2"], test_db)
+
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
+        data = resp.get_json()
+
+        # Tweet 2 should have tweet 1 as ancestor
+        assert len(data["tweets"]) == 1
+        reply = data["tweets"][0]
+        assert reply["id"] == "2"
+        assert len(reply["thread_ancestors"]) == 1
+        assert reply["thread_ancestors"][0]["id"] == "1"
+
+    def test_thread_ancestor_includes_quoted_tweet(self, client, test_db):
+        """
+        If a thread ancestor is a quote tweet, its quoted_tweet should be included.
+
+        Thread: B -> A, where A quotes Z
+        When viewing B, A should include Z as its quoted_tweet.
+        """
+        tweets = [
+            make_tweet(id="Z", text="Quoted original"),
+            make_tweet(id="A", text="Quote tweet", quoted_tweet_id="Z"),
+            make_tweet(id="B", text="Reply to quote", reply_to_tweet_id="A"),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["Z", "A", "B"], test_db)
+
+        resp = client.get("/api/ui/tweets?status=approved&leaf_only=true")
+        data = resp.get_json()
+
+        # B should be the main tweet
+        ids = {t["id"] for t in data["tweets"]}
+        assert "B" in ids
+
+        # Find B and check its ancestors
+        tweet_b = next(t for t in data["tweets"] if t["id"] == "B")
+        ancestors = tweet_b.get("thread_ancestors", [])
+        assert len(ancestors) == 1
+        ancestor_a = ancestors[0]
+        assert ancestor_a["id"] == "A"
+
+        # A should have Z as its quoted_tweet
+        assert ancestor_a.get("quoted_tweet") is not None
+        assert ancestor_a["quoted_tweet"]["id"] == "Z"
 
 
 class TestStatusFiltering:
@@ -225,8 +193,7 @@ class TestStatusFiltering:
         filter_tweets(["2"], test_db)
         # Tweet 3 has no decision -> pending
 
-        # Use group_conversations=false to get tweets format
-        resp = client.get("/api/ui/tweets?status=approved&group_conversations=false")
+        resp = client.get("/api/ui/tweets?status=approved")
         data = resp.get_json()
 
         assert len(data["tweets"]) == 1
@@ -274,8 +241,7 @@ class TestPagination:
         create_and_store_tweets(tweets, test_db)
         approve_tweets([str(i) for i in range(10)], test_db)
 
-        # Use group_conversations=false to get individual tweets
-        resp = client.get("/api/ui/tweets?status=approved&limit=3&group_conversations=false")
+        resp = client.get("/api/ui/tweets?status=approved&limit=3")
         data = resp.get_json()
 
         assert len(data["tweets"]) == 3
@@ -287,21 +253,8 @@ class TestPagination:
         create_and_store_tweets(tweets, test_db)
         approve_tweets([str(i) for i in range(10)], test_db)
 
-        resp = client.get("/api/ui/tweets?status=approved&limit=3&offset=3&group_conversations=false")
+        resp = client.get("/api/ui/tweets?status=approved&limit=3&offset=3")
         data = resp.get_json()
 
         assert len(data["tweets"]) == 3
         assert data["total"] == 10
-
-    def test_conversation_pagination(self, client, test_db):
-        """Pagination should work with conversation clusters."""
-        # Create 5 independent tweets (5 separate conversations)
-        tweets = [make_tweet(id=str(i), text=f"Tweet {i}") for i in range(5)]
-        create_and_store_tweets(tweets, test_db)
-        approve_tweets([str(i) for i in range(5)], test_db)
-
-        resp = client.get("/api/ui/tweets?status=approved&limit=2&group_conversations=true")
-        data = resp.get_json()
-
-        assert len(data["conversations"]) == 2
-        assert data["total"] == 5

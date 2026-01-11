@@ -20,11 +20,8 @@ from classifier import setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
-    build_conversation_cluster,
     create_mode,
     delete_mode,
-    get_conversation_root,
-    get_direct_replies,
     get_mode,
     get_mode_decisions_batch,
     get_mode_label_counts,
@@ -601,98 +598,6 @@ def create_app(config=None):
         prompts = list_prompts(db_path)
         return render_template("modes.html", modes=modes, prompts=prompts, active_page="modes")
 
-    def _get_conversation_clusters(
-        db_path: Path,
-        mode_id: str,
-        search: str,
-        sort_field: str,
-        limit: int,
-        offset: int,
-    ):
-        """
-        Build conversation clusters for the read page.
-        Groups approved tweets into conversations, showing the best chain for each.
-        Returns {"conversations": [...], "total": N}
-        """
-        # Step 1: Get all approved tweets
-        with transaction(db_path) as conn:
-            query = """
-                SELECT t.* FROM tweets t
-                JOIN mode_decisions md ON t.id = md.tweet_id
-                WHERE md.mode_id = ? AND md.decision = 'approved'
-            """
-            params: list[str] = [mode_id]
-
-            if search:
-                query += " AND (t.author_username LIKE ? OR t.text LIKE ?)"
-                params.extend([f"%{search}%", f"%{search}%"])
-
-            rows = conn.execute(query, params).fetchall()
-            all_tweets = [dict(row) for row in rows]
-
-        if not all_tweets:
-            return jsonify({"conversations": [], "total": 0})
-
-        # Step 2: Group tweets by conversation root
-        root_to_tweets: dict[str, list[dict]] = {}
-        for tweet in all_tweets:
-            root_id = get_conversation_root(tweet["id"], db_path)
-            if root_id not in root_to_tweets:
-                root_to_tweets[root_id] = []
-            root_to_tweets[root_id].append(tweet)
-
-        # Step 3: Build clusters for each conversation
-        clusters = []
-        for root_id in root_to_tweets:
-            cluster = build_conversation_cluster(root_id, mode_id, db_path)
-            if cluster["primary_chain"]:
-                # Sort key: use the root tweet's timestamp
-                root_tweet = cluster["primary_chain"][0]
-                sort_key = root_tweet.get(sort_field) or root_tweet.get("captured_at")
-                cluster["_sort_key"] = sort_key
-                clusters.append(cluster)
-
-        # Step 4: Sort by the chosen field (descending = most recent first)
-        clusters.sort(key=lambda c: c.get("_sort_key", ""), reverse=True)
-        total = len(clusters)
-
-        # Step 5: Paginate
-        clusters = clusters[offset : offset + limit]
-
-        # Step 6: Enrich tweets in clusters with quoted tweets and retweet info
-        all_chain_tweet_ids = []
-        for cluster in clusters:
-            for tweet in cluster["primary_chain"]:
-                all_chain_tweet_ids.append(tweet["id"])
-
-        # Get quoted tweets
-        quoted_tweet_ids = []
-        for cluster in clusters:
-            for tweet in cluster["primary_chain"]:
-                if tweet.get("quoted_tweet_id"):
-                    quoted_tweet_ids.append(tweet["quoted_tweet_id"])
-        quoted_tweets = {}
-        if quoted_tweet_ids:
-            quoted_tweets = get_tweets_batch(quoted_tweet_ids, db_path)
-
-        # Get retweet info
-        retweets_by_tweet = get_retweets_batch(all_chain_tweet_ids, db_path)
-
-        # Enrich tweets
-        for cluster in clusters:
-            for tweet in cluster["primary_chain"]:
-                tid = tweet["id"]
-                tweet["retweeted_by"] = retweets_by_tweet.get(tid, [])
-                if tweet.get("quoted_tweet_id"):
-                    tweet["quoted_tweet"] = quoted_tweets.get(tweet["quoted_tweet_id"])
-
-            # Remove internal sort key
-            cluster.pop("_sort_key", None)
-            # Don't include all_tweets in response (it's for internal use)
-            cluster.pop("all_tweets", None)
-
-        return jsonify({"conversations": clusters, "total": total})
-
     @app.route("/api/ui/tweets", methods=["GET"])
     def api_ui_tweets():
         """
@@ -705,7 +610,7 @@ def create_app(config=None):
         - sort: Sort field (created_at, captured_at)
         - limit: Number of tweets
         - offset: Pagination offset
-        - group_conversations: If "true" with status="approved", returns conversation clusters
+        - leaf_only: If "true", only show leaf tweets (no approved replies to them)
         """
         db_path = get_db_path()
         mode_id = request.args.get("mode", "default")
@@ -714,14 +619,7 @@ def create_app(config=None):
         sort_field = request.args.get("sort", "captured_at")
         limit = request.args.get("limit", 20, type=int)
         offset = request.args.get("offset", 0, type=int)
-        group_conversations = request.args.get("group_conversations", "").lower() == "true"
-
-        # Conversation cluster mode: groups tweets into conversations
-        # Returns grouped conversations instead of individual tweets
-        if group_conversations and status_filter == "approved":
-            return _get_conversation_clusters(
-                db_path, mode_id, search, sort_field, limit, offset
-            )
+        leaf_only = request.args.get("leaf_only", "").lower() == "true"
 
         # Build query using cached mode_decisions table
         with transaction(db_path) as conn:
@@ -762,6 +660,34 @@ def create_app(config=None):
                     query += " WHERE (t.author_username LIKE ? OR t.text LIKE ?)"
                 params.extend([f"%{search}%", f"%{search}%"])
 
+            # Leaf-only filter: exclude tweets that have approved children or are quoted without context
+            # Uses an optimized JOIN-based approach instead of correlated subqueries for performance
+            if leaf_only:
+                # Wrap the existing query and join with pre-computed parent/quoted sets
+                query = f"""
+                    WITH base_tweets AS ({query}),
+                    replied_parents AS (
+                        SELECT DISTINCT reply_to_tweet_id as parent_id
+                        FROM tweets child
+                        JOIN mode_decisions md_child ON child.id = md_child.tweet_id
+                        WHERE md_child.mode_id = ? AND md_child.decision = 'approved'
+                        AND reply_to_tweet_id IS NOT NULL
+                    ),
+                    quoted_originals AS (
+                        SELECT DISTINCT quoted_tweet_id as quoted_id
+                        FROM tweets quoter
+                        JOIN mode_decisions md_quoter ON quoter.id = md_quoter.tweet_id
+                        WHERE md_quoter.mode_id = ? AND md_quoter.decision = 'approved'
+                        AND quoted_tweet_id IS NOT NULL
+                    )
+                    SELECT t.* FROM base_tweets t
+                    LEFT JOIN replied_parents rp ON t.id = rp.parent_id
+                    LEFT JOIN quoted_originals qo ON t.id = qo.quoted_id
+                    WHERE rp.parent_id IS NULL
+                    AND (t.reply_to_tweet_id IS NOT NULL OR qo.quoted_id IS NULL)
+                """
+                params.extend([mode_id, mode_id])
+
             # Sort
             if sort_field in ("created_at", "captured_at"):
                 query += f" ORDER BY t.{sort_field} DESC"
@@ -769,9 +695,15 @@ def create_app(config=None):
                 query += " ORDER BY t.captured_at DESC"
 
             # Get total count first
-            count_query = query.split(" ORDER BY")[0]
-            count_query = count_query.replace("SELECT t.*", "SELECT COUNT(*)", 1)
-            count_query = count_query.replace("SELECT *", "SELECT COUNT(*)", 1)
+            # For CTE queries (leaf_only), wrap in subquery; otherwise use simple replacement
+            if leaf_only:
+                # For CTE queries, wrap the whole query (minus ORDER BY) in a subquery
+                base_query = query.split(" ORDER BY")[0]
+                count_query = f"SELECT COUNT(*) FROM ({base_query}) AS count_subq"
+            else:
+                count_query = query.split(" ORDER BY")[0]
+                count_query = count_query.replace("SELECT t.*", "SELECT COUNT(*)", 1)
+                count_query = count_query.replace("SELECT *", "SELECT COUNT(*)", 1)
             total = conn.execute(count_query, params).fetchone()[0]
 
             # Add pagination
@@ -879,68 +811,6 @@ def create_app(config=None):
                 tweet["thread_ancestors"] = thread_context.get(tid, [])
 
         return jsonify({"tweets": tweets, "total": total})
-
-    @app.route("/api/ui/tweet/<tweet_id>/replies", methods=["GET"])
-    def api_ui_tweet_replies(tweet_id: str):
-        """
-        Get a tweet and its direct replies for the reply modal.
-        Returns the parent tweet plus all approved direct replies.
-        """
-        db_path = get_db_path()
-        mode_id = request.args.get("mode", "default")
-
-        # Get the parent tweet
-        tweets = get_tweets_batch([tweet_id], db_path)
-        if not tweets or tweet_id not in tweets:
-            return jsonify({"error": "Tweet not found"}), 404
-
-        parent_tweet = tweets[tweet_id]
-
-        # Get direct replies
-        replies = get_direct_replies(tweet_id, mode_id, db_path)
-
-        # Get reply counts for each reply (to show "N more replies" in modal)
-        reply_counts: dict[str, int] = {}
-        if replies:
-            reply_ids = [r["id"] for r in replies]
-            with transaction(db_path) as conn:
-                placeholders = ",".join("?" * len(reply_ids))
-                rows = conn.execute(
-                    f"""
-                    SELECT t.reply_to_tweet_id, COUNT(*) as count
-                    FROM tweets t
-                    JOIN mode_decisions md ON t.id = md.tweet_id
-                    WHERE t.reply_to_tweet_id IN ({placeholders})
-                    AND md.mode_id = ? AND md.decision = 'approved'
-                    GROUP BY t.reply_to_tweet_id
-                    """,
-                    (*reply_ids, mode_id),
-                ).fetchall()
-                for row in rows:
-                    reply_counts[row["reply_to_tweet_id"]] = row["count"]
-
-        # Enrich with quoted tweets
-        quoted_ids = []
-        if parent_tweet.get("quoted_tweet_id"):
-            quoted_ids.append(parent_tweet["quoted_tweet_id"])
-        for reply in replies:
-            if reply.get("quoted_tweet_id"):
-                quoted_ids.append(reply["quoted_tweet_id"])
-
-        quoted_tweets = {}
-        if quoted_ids:
-            quoted_tweets = get_tweets_batch(quoted_ids, db_path)
-
-        if parent_tweet.get("quoted_tweet_id"):
-            parent_tweet["quoted_tweet"] = quoted_tweets.get(
-                parent_tweet["quoted_tweet_id"]
-            )
-        for reply in replies:
-            if reply.get("quoted_tweet_id"):
-                reply["quoted_tweet"] = quoted_tweets.get(reply["quoted_tweet_id"])
-            reply["reply_count_approved"] = reply_counts.get(reply["id"], 0)
-
-        return jsonify({"tweet": parent_tweet, "replies": replies})
 
     @app.route("/api/ui/label", methods=["POST"])
     def api_ui_label():
