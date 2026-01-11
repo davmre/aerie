@@ -256,6 +256,7 @@ def compute_mode_decisions(
 
     if prefilter_is_total:
         # Prefilter decides everything - iterate all tweets without decisions
+        assert prefilter_fn is not None  # prefilter_is_total implies prefilter_fn exists
         while True:
             tweets = get_tweets_without_decision(mode_id, limit=batch_size, db_path=db_path)
             if not tweets:

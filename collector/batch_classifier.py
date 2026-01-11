@@ -9,11 +9,13 @@ requests.
 import json
 import os
 import re
+from pathlib import Path
 from typing import Optional
 
 import anthropic
+from anthropic.types import TextBlock
 
-from database import get_prompt, store_prompt_response
+from database import get_prompt, store_prompt_response, DEFAULT_DB_PATH
 
 
 # Default model for classification
@@ -219,7 +221,13 @@ def classify_tweets_batch(
             ],
         )
 
-        content = response.content[0].text.strip()
+        first_block = response.content[0]
+        if not isinstance(first_block, TextBlock):
+            return {
+                t["id"]: {"_error": "unexpected_response", "_message": "No text content"}
+                for t in tweets
+            }
+        content = first_block.text.strip()
         return parse_batch_response(content, expected_ids)
 
     except anthropic.RateLimitError as e:
@@ -244,6 +252,7 @@ def classify_and_store_batch(
     prompt_id: str,
     model: str = DEFAULT_MODEL,
     client: Optional[anthropic.Anthropic] = None,
+    db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, dict]:
     """
     Classify tweets and store the results in prompt_responses.
@@ -257,6 +266,6 @@ def classify_and_store_batch(
 
     # Store each result
     for tweet_id, response in results.items():
-        store_prompt_response(tweet_id, prompt_id, model, response)
+        store_prompt_response(tweet_id, prompt_id, model, response, db_path)
 
     return results

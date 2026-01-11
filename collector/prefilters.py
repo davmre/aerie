@@ -43,7 +43,7 @@ def author_whitelist(tweet: dict[str, Any]) -> bool | None:
     return None
 
 
-def make_author_filter(whitelist: set[str] = None, blacklist: set[str] = None):
+def make_author_filter(whitelist: set[str] | None = None, blacklist: set[str] | None = None):
     """
     Factory for custom author filters.
 
@@ -137,7 +137,7 @@ def viral_auto_show(min_likes: int = 10000):
 # =============================================================================
 
 
-def keyword_filter(show_keywords: set[str] = None, hide_keywords: set[str] = None):
+def keyword_filter(show_keywords: set[str] | None = None, hide_keywords: set[str] | None = None):
     """
     Factory for keyword-based prefilters.
     Checks tweet text for keywords (case-insensitive).

@@ -1,0 +1,17 @@
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+
+# Include all Python files in collector
+include = ["*.py", "tests/*.py"]
+
+# Exclude cache directories
+exclude = ["**/__pycache__"]
+
+# Report missing imports (helps catch typos)
+reportMissingImports = true
+
+# These are useful for catching real bugs
+reportUnusedVariable = true
+reportDuplicateImport = true
+reportInvalidTypeForm = true

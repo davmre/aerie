@@ -123,7 +123,7 @@ def start_classification_worker(db_path: Path, config: dict):
 
                     # Update mode decisions for all classified tweets
                     if all_tweet_ids:
-                        compute_mode_decisions_for_tweets(all_tweet_ids, db_path)
+                        compute_mode_decisions_for_tweets(all_tweet_ids, db_path=db_path)
 
                     # Mark jobs as complete
                     queue.mark_complete([j.tweet_id for j in jobs])
@@ -174,7 +174,7 @@ def create_app(config=None):
             setup_prompts_and_modes(db_path)
             if not app.config["TESTING"]:
                 start_classification_worker(db_path, app.config["CLASSIFICATION_CONFIG"])
-            app._db_initialized = True
+            app._db_initialized = True  # type: ignore[attr-defined]
 
     @app.after_request
     def add_cors_headers(response):
@@ -242,7 +242,7 @@ def create_app(config=None):
             except KeyError as e:
                 return jsonify({"error": str(e)}), 400
         # Fallback to legacy stats for backwards compatibility
-        return jsonify(get_stats(db_path))
+        return jsonify(get_stats(db_path=db_path))
 
     @app.route("/tweets/check", methods=["POST", "OPTIONS"])
     def check_tweets():
@@ -419,6 +419,7 @@ def create_app(config=None):
 
         # Return the created mode
         mode = get_mode(mode_id, db_path)
+        assert mode is not None  # We just created it
         return jsonify({"status": "ok", "mode": _parse_mode_config(mode)})
 
 
@@ -481,6 +482,7 @@ def create_app(config=None):
 
         # Return updated mode
         mode = get_mode(mode_id, db_path)
+        assert mode is not None  # We just updated it
         return jsonify({"status": "ok", "mode": _parse_mode_config(mode)})
 
     @app.route("/api/modes/<mode_id>", methods=["DELETE"])
@@ -574,12 +576,9 @@ def create_app(config=None):
         offset = request.args.get("offset", 0, type=int)
         leaf_only = request.args.get("leaf_only", "").lower() == "true"
 
-        # Get mode config
-        mode_config = get_mode(mode_id, db_path)
-        prompt_id = mode_config["prompt_id"] if mode_config else "binary_filter_v1"
-
         # Build query using cached mode_decisions table
         with transaction(db_path) as conn:
+            params: list[str | int] = []
             if status_filter == "unlabeled":
                 # Unlabeled by human - use SQL
                 query = """
@@ -607,7 +606,6 @@ def create_app(config=None):
             else:
                 # All tweets
                 query = "SELECT * FROM tweets t"
-                params = []
 
             # Search filter
             if search:

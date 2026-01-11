@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import anthropic
+from anthropic.types import TextBlock
 
 from database import (
     DEFAULT_DB_PATH,
@@ -182,7 +183,10 @@ def call_llm(
             ],
         )
 
-        content = response.content[0].text.strip()
+        first_block = response.content[0]
+        if not isinstance(first_block, TextBlock):
+            return {"_error": "unexpected_response", "_message": "No text content"}
+        content = first_block.text.strip()
 
         # Parse JSON response
         try:
@@ -232,7 +236,7 @@ def run_classification(
     system_prompt = prompt["prompt_text"]
 
     # Get stats
-    stats = get_stats(db_path)
+    stats = get_stats(db_path=db_path)
     tweets_to_process = get_tweets_without_response(prompt_id, model, limit=10000, db_path=db_path)
     pending_count = len(tweets_to_process)
 

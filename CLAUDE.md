@@ -295,6 +295,38 @@ app = create_app({
 })
 ```
 
+## Type Checking
+
+The collector uses pyright for static type checking. This catches bugs like passing arguments in the wrong position (e.g., passing `db_path` where `max_depth` is expected).
+
+```bash
+# Run type checker
+cd collector
+pyright
+```
+
+Configuration is in `pyproject.toml`:
+- Python 3.12 target
+- Basic type checking mode (catches real bugs without being overly strict)
+- Reports missing imports, unused variables, and duplicate imports
+
+**Common patterns:**
+
+```python
+# Use keyword arguments for functions with multiple optional parameters
+get_thread_context_batch(tweet_ids, db_path=db_path)  # Good
+get_thread_context_batch(tweet_ids, db_path)          # Risky - positional arg
+
+# Use isinstance() for union types (e.g., Anthropic API responses)
+first_block = response.content[0]
+if isinstance(first_block, TextBlock):
+    content = first_block.text.strip()  # Type-safe access
+
+# Use | None for optional parameters with None defaults
+def my_func(items: set[str] | None = None):
+    items = items or set()
+```
+
 ## Classifier Usage
 
 The classifier uses Claude to evaluate tweets against prompts stored in the database.

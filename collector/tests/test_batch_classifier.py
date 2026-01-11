@@ -4,6 +4,7 @@ import json
 from unittest.mock import Mock, patch
 
 import pytest
+from anthropic.types import TextBlock
 
 from batch_classifier import (
     format_tweet_for_batch,
@@ -223,7 +224,7 @@ class TestClassifyTweetsBatch:
         mock_client = Mock()
         mock_anthropic_class.return_value = mock_client
         mock_response = Mock()
-        mock_response.content = [Mock(text='[{"id": "123", "approved": true, "reason": "Good"}]')]
+        mock_response.content = [TextBlock(type="text", text='[{"id": "123", "approved": true, "reason": "Good"}]')]
         mock_client.messages.create.return_value = mock_response
 
         tweets = [{"id": "123", "text": "Test tweet", "author_username": "user"}]
