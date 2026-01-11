@@ -301,27 +301,33 @@ def create_app(config=None):
         except KeyError as e:
             return jsonify({"error": str(e)}), 400
 
-        # Find tweets that need decisions computed
-        pending_ids = [
-            tid for tid, status in statuses.items()
-            if status in ("pending", "unknown")
+        # Check which tweets already have cached decisions
+        cached_decisions = get_mode_decisions_batch(ids, mode_id, db_path)
+
+        # Find tweets that need decisions computed/cached
+        # This includes:
+        # - tweets with pending status (need LLM or prefilter)
+        # - tweets with prefilter decisions but no cached entry yet
+        uncached_ids = [
+            tid for tid in ids
+            if tid not in cached_decisions and statuses.get(tid) != "unknown"
         ]
 
-        if pending_ids:
-            # Compute and persist prefilter decisions for this mode
-            # This is fast (no LLM) and handles prefilter-only modes instantly
+        if uncached_ids:
+            # Compute and persist decisions for this mode
+            # This handles prefilter-only modes instantly
             computed = compute_mode_decisions_for_tweets(
-                pending_ids, mode_ids=[mode_id], db_path=db_path
+                uncached_ids, mode_ids=[mode_id], db_path=db_path
             )
 
             # Update statuses with newly computed decisions
-            for tid in pending_ids:
+            for tid in uncached_ids:
                 if tid in computed and mode_id in computed[tid]:
                     statuses[tid] = computed[tid][mode_id]
 
             # Queue remaining pending tweets for LLM classification
             still_pending = [
-                tid for tid in pending_ids
+                tid for tid in uncached_ids
                 if statuses.get(tid) == "pending"
             ]
             if still_pending:
