@@ -1,6 +1,13 @@
 """Tests for conversation chain computation."""
 
-from database import compute_conversation_chains, get_replies_for_tweet, store_tweets
+from database import (
+    compute_conversation_chains,
+    compute_single_chain,
+    get_approved_descendants,
+    get_conversation_roots,
+    get_replies_for_tweet,
+    store_tweets,
+)
 from tests.fixtures import approve_tweets, make_tweet
 
 
@@ -235,3 +242,225 @@ class TestGetRepliesForTweet:
         reply_ids = [r["tweet"]["id"] for r in result["replies"]]
         # Oldest first: 2, 4, 3
         assert reply_ids == ["2", "4", "3"]
+
+
+class TestGetConversationRoots:
+    """Tests for get_conversation_roots function (scalable root finding)."""
+
+    def test_finds_standalone_tweets_as_roots(self, test_db):
+        """Standalone tweets (no reply_to) are roots."""
+        tweets = [
+            make_tweet(id="1", text="Tweet A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Tweet B", created_at="2025-01-01T11:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2"], test_db)
+
+        roots, total = get_conversation_roots("default", db_path=test_db)
+
+        assert total == 2
+        assert len(roots) == 2
+        root_ids = {r["id"] for r in roots}
+        assert root_ids == {"1", "2"}
+
+    def test_reply_with_unapproved_parent_is_root(self, test_db):
+        """A reply whose parent is not approved becomes a root."""
+        tweets = [
+            make_tweet(id="1", text="Tweet A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Tweet B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        # Only approve B
+        approve_tweets(["2"], test_db)
+
+        roots, total = get_conversation_roots("default", db_path=test_db)
+
+        assert total == 1
+        assert roots[0]["id"] == "2"
+
+    def test_reply_with_approved_parent_is_not_root(self, test_db):
+        """A reply whose parent is approved is NOT a root."""
+        tweets = [
+            make_tweet(id="1", text="Tweet A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Tweet B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2"], test_db)
+
+        roots, total = get_conversation_roots("default", db_path=test_db)
+
+        # Only A is a root, B is not
+        assert total == 1
+        assert roots[0]["id"] == "1"
+
+    def test_pagination_works(self, test_db):
+        """Pagination limit and offset work correctly."""
+        tweets = [
+            make_tweet(id="1", text="Tweet 1", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Tweet 2", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="Tweet 3", created_at="2025-01-01T12:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        # Get first page
+        roots1, total = get_conversation_roots(
+            "default", limit=2, offset=0, db_path=test_db
+        )
+        assert total == 3
+        assert len(roots1) == 2
+
+        # Get second page
+        roots2, total = get_conversation_roots(
+            "default", limit=2, offset=2, db_path=test_db
+        )
+        assert total == 3
+        assert len(roots2) == 1
+
+    def test_sorts_by_created_at_descending(self, test_db):
+        """Roots are sorted by created_at descending (newest first)."""
+        tweets = [
+            make_tweet(id="1", text="Old", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="New", created_at="2025-01-02T10:00:00"),
+            make_tweet(id="3", text="Mid", created_at="2025-01-01T15:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        roots, _ = get_conversation_roots(
+            "default", sort_field="created_at", db_path=test_db
+        )
+
+        root_ids = [r["id"] for r in roots]
+        assert root_ids == ["2", "3", "1"]
+
+
+class TestGetApprovedDescendants:
+    """Tests for get_approved_descendants function."""
+
+    def test_returns_root_only_if_no_children(self, test_db):
+        """Returns just the root if it has no approved children."""
+        tweets = [make_tweet(id="1", text="Solo tweet")]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1"], test_db)
+
+        descendants = get_approved_descendants("1", "default", test_db)
+
+        assert len(descendants) == 1
+        assert "1" in descendants
+
+    def test_returns_all_approved_descendants(self, test_db):
+        """Returns all approved tweets in the subtree."""
+        tweets = [
+            make_tweet(id="1", text="Root", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Child", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="Grandchild", reply_to_tweet_id="2", created_at="2025-01-01T12:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        descendants = get_approved_descendants("1", "default", test_db)
+
+        assert len(descendants) == 3
+        assert set(descendants.keys()) == {"1", "2", "3"}
+
+    def test_excludes_unapproved_descendants(self, test_db):
+        """Unapproved descendants are not included."""
+        tweets = [
+            make_tweet(id="1", text="Root", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="Approved child", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="Unapproved child", reply_to_tweet_id="1", created_at="2025-01-01T12:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2"], test_db)
+
+        descendants = get_approved_descendants("1", "default", test_db)
+
+        assert len(descendants) == 2
+        assert "3" not in descendants
+
+
+class TestComputeSingleChain:
+    """Tests for compute_single_chain function (scalable per-chain computation)."""
+
+    def test_single_tweet_chain(self, test_db):
+        """A single tweet becomes a chain of length 1."""
+        tweets = [make_tweet(id="1", text="Solo")]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1"], test_db)
+
+        result = compute_single_chain("1", "default", test_db)
+
+        assert len(result["chain"]) == 1
+        assert result["chain"][0]["id"] == "1"
+        assert result["hidden_replies"] == {}
+
+    def test_linear_chain(self, test_db):
+        """A->B->C becomes chain [A, B, C]."""
+        tweets = [
+            make_tweet(id="1", text="A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="C", reply_to_tweet_id="2", created_at="2025-01-01T12:00:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        result = compute_single_chain("1", "default", test_db)
+
+        assert [t["id"] for t in result["chain"]] == ["1", "2", "3"]
+        assert result["hidden_replies"] == {}
+
+    def test_branch_picks_longest(self, test_db):
+        """A->B->C and A->D picks [A, B, C] with hidden reply on A."""
+        tweets = [
+            make_tweet(id="1", text="A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="C", reply_to_tweet_id="2", created_at="2025-01-01T12:00:00"),
+            make_tweet(id="4", text="D", reply_to_tweet_id="1", created_at="2025-01-01T11:30:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3", "4"], test_db)
+
+        result = compute_single_chain("1", "default", test_db)
+
+        assert [t["id"] for t in result["chain"]] == ["1", "2", "3"]
+        assert result["hidden_replies"]["1"] == 1
+
+    def test_tie_stops_chain(self, test_db):
+        """A->B and A->C (equal length) stops at [A] with 2 hidden."""
+        tweets = [
+            make_tweet(id="1", text="A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="C", reply_to_tweet_id="1", created_at="2025-01-01T11:30:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        result = compute_single_chain("1", "default", test_db)
+
+        assert [t["id"] for t in result["chain"]] == ["1"]
+        assert result["hidden_replies"]["1"] == 2
+
+    def test_matches_compute_conversation_chains(self, test_db):
+        """compute_single_chain produces same result as compute_conversation_chains."""
+        tweets = [
+            make_tweet(id="1", text="A", created_at="2025-01-01T10:00:00"),
+            make_tweet(id="2", text="B", reply_to_tweet_id="1", created_at="2025-01-01T11:00:00"),
+            make_tweet(id="3", text="C", reply_to_tweet_id="2", created_at="2025-01-01T12:00:00"),
+            make_tweet(id="4", text="D", reply_to_tweet_id="1", created_at="2025-01-01T11:30:00"),
+        ]
+        store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3", "4"], test_db)
+
+        # Old method
+        old_chains = compute_conversation_chains(["1", "2", "3", "4"], "default", test_db)
+
+        # New method
+        new_chain = compute_single_chain("1", "default", test_db)
+
+        # Should produce same chain structure
+        assert len(old_chains) == 1
+        old_chain_ids = [t["id"] for t in old_chains[0]["chain"]]
+        new_chain_ids = [t["id"] for t in new_chain["chain"]]
+        assert old_chain_ids == new_chain_ids
+        assert old_chains[0]["hidden_replies"] == new_chain["hidden_replies"]

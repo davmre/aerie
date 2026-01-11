@@ -20,9 +20,10 @@ from classifier import setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
-    compute_conversation_chains,
+    compute_single_chain,
     create_mode,
     delete_mode,
+    get_conversation_roots,
     get_mode,
     get_mode_decisions_batch,
     get_mode_label_counts,
@@ -881,6 +882,10 @@ def create_app(config=None):
         - offset: Pagination offset
 
         Returns chains with hidden_replies counts for expandable UI.
+
+        Scalability: This endpoint paginates at the conversation root level,
+        computing chains on-demand for each root. This avoids loading all
+        approved tweets into memory.
         """
         db_path = get_db_path()
         mode_id = request.args.get("mode", "default")
@@ -888,42 +893,24 @@ def create_app(config=None):
         limit = request.args.get("limit", 20, type=int)
         offset = request.args.get("offset", 0, type=int)
 
-        # Get all approved tweet IDs for this mode
-        with transaction(db_path) as conn:
-            rows = conn.execute(
-                """
-                SELECT t.id FROM tweets t
-                JOIN mode_decisions md ON t.id = md.tweet_id
-                WHERE md.mode_id = ? AND md.decision = 'approved'
-                """,
-                (mode_id,),
-            ).fetchall()
-            approved_ids = [row["id"] for row in rows]
+        # Get paginated conversation roots
+        roots, total = get_conversation_roots(
+            mode_id=mode_id,
+            sort_field=sort_field,
+            limit=limit,
+            offset=offset,
+            db_path=db_path,
+        )
 
-        if not approved_ids:
-            return jsonify({"chains": [], "total": 0})
+        if not roots:
+            return jsonify({"chains": [], "total": total})
 
-        # Compute all chains
-        all_chains = compute_conversation_chains(approved_ids, mode_id, db_path)
-
-        # Sort chains based on sort_field
-        # For created_at, use the first tweet's created_at
-        # For captured_at, use the first tweet's captured_at
-        if sort_field == "created_at":
-            all_chains.sort(
-                key=lambda c: c["chain"][0].get("created_at") or "",
-                reverse=True,
-            )
-        else:
-            all_chains.sort(
-                key=lambda c: c["chain"][0].get("captured_at") or "",
-                reverse=True,
-            )
-
-        total = len(all_chains)
-
-        # Apply pagination
-        chains = all_chains[offset : offset + limit]
+        # Compute chain for each root on-demand
+        chains = []
+        for root in roots:
+            chain_data = compute_single_chain(root["id"], mode_id, db_path)
+            if chain_data["chain"]:
+                chains.append(chain_data)
 
         # Enrich chains with additional data
         # Collect all tweet IDs in chains for batch operations
@@ -931,6 +918,9 @@ def create_app(config=None):
         for chain_entry in chains:
             for tweet in chain_entry["chain"]:
                 all_tweet_ids.append(tweet["id"])
+
+        if not all_tweet_ids:
+            return jsonify({"chains": [], "total": total})
 
         # Get retweet info
         retweets_by_tweet = get_retweets_batch(all_tweet_ids, db_path)

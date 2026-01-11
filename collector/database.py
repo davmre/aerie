@@ -1150,6 +1150,239 @@ def get_direct_replies_batch(
         return result
 
 
+def get_conversation_roots(
+    mode_id: str,
+    sort_field: str = "created_at",
+    limit: int = 20,
+    offset: int = 0,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> tuple[list[dict], int]:
+    """
+    Get conversation roots (tweets with no approved parent) for a mode.
+
+    A root is an approved tweet where either:
+    - It has no reply_to_tweet_id (original tweet), or
+    - Its parent is not approved in this mode
+
+    Args:
+        mode_id: Mode ID for filtering approved tweets
+        sort_field: Field to sort by (created_at or captured_at)
+        limit: Number of roots to return
+        offset: Pagination offset
+        db_path: Database path
+
+    Returns:
+        Tuple of (list of root tweets, total count of roots)
+    """
+    # Validate sort field to prevent SQL injection
+    if sort_field not in ("created_at", "captured_at"):
+        sort_field = "created_at"
+
+    with transaction(db_path) as conn:
+        # Count total roots first
+        count_row = conn.execute(
+            """
+            SELECT COUNT(*) as cnt FROM tweets t
+            JOIN mode_decisions md ON t.id = md.tweet_id
+            WHERE md.mode_id = ? AND md.decision = 'approved'
+              AND (
+                  t.reply_to_tweet_id IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1 FROM mode_decisions md2
+                      WHERE md2.tweet_id = t.reply_to_tweet_id
+                        AND md2.mode_id = ?
+                        AND md2.decision = 'approved'
+                  )
+              )
+            """,
+            (mode_id, mode_id),
+        ).fetchone()
+        total = count_row["cnt"]
+
+        # Get paginated roots
+        rows = conn.execute(
+            f"""
+            SELECT t.* FROM tweets t
+            JOIN mode_decisions md ON t.id = md.tweet_id
+            WHERE md.mode_id = ? AND md.decision = 'approved'
+              AND (
+                  t.reply_to_tweet_id IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1 FROM mode_decisions md2
+                      WHERE md2.tweet_id = t.reply_to_tweet_id
+                        AND md2.mode_id = ?
+                        AND md2.decision = 'approved'
+                  )
+              )
+            ORDER BY t.{sort_field} DESC
+            LIMIT ? OFFSET ?
+            """,
+            (mode_id, mode_id, limit, offset),
+        ).fetchall()
+
+        return [dict(row) for row in rows], total
+
+
+def get_approved_descendants(
+    root_id: str,
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, dict]:
+    """
+    Get all approved descendants of a tweet (for computing a single chain).
+
+    Uses a recursive approach to find all tweets in the subtree rooted at root_id
+    that are approved in the given mode.
+
+    Returns:
+        Dict mapping tweet_id -> tweet dict for all approved descendants
+        (including the root itself if approved)
+    """
+    with transaction(db_path) as conn:
+        # Use iterative BFS to find all descendants
+        # Start with the root
+        root_row = conn.execute(
+            "SELECT * FROM tweets WHERE id = ?", (root_id,)
+        ).fetchone()
+        if not root_row:
+            return {}
+
+        result = {root_id: dict(root_row)}
+        queue = [root_id]
+        visited = {root_id}
+
+        while queue:
+            current_ids = queue[:]
+            queue = []
+
+            # Find approved children of current batch
+            placeholders = ",".join("?" * len(current_ids))
+            rows = conn.execute(
+                f"""
+                SELECT t.* FROM tweets t
+                JOIN mode_decisions md ON t.id = md.tweet_id
+                WHERE t.reply_to_tweet_id IN ({placeholders})
+                  AND md.mode_id = ?
+                  AND md.decision = 'approved'
+                """,
+                (*current_ids, mode_id),
+            ).fetchall()
+
+            for row in rows:
+                tid = row["id"]
+                if tid not in visited:
+                    visited.add(tid)
+                    result[tid] = dict(row)
+                    queue.append(tid)
+
+        return result
+
+
+def compute_single_chain(
+    root_id: str,
+    mode_id: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict:
+    """
+    Compute a single conversation chain starting from a root tweet.
+
+    This is the scalable version that only loads the subtree for one chain,
+    rather than all approved tweets.
+
+    Args:
+        root_id: ID of the root tweet (must be a conversation root)
+        mode_id: Mode ID for filtering approved tweets
+        db_path: Database path
+
+    Returns:
+        Chain entry with:
+        - chain: list of tweets in chronological order
+        - hidden_replies: dict mapping tweet_id -> count of hidden siblings
+    """
+    # Get all approved descendants of this root
+    tweets_by_id = get_approved_descendants(root_id, mode_id, db_path)
+
+    if not tweets_by_id:
+        return {"chain": [], "hidden_replies": {}}
+
+    tweet_set = set(tweets_by_id.keys())
+
+    # Build parent -> children mapping
+    children_by_parent: dict[str, list[str]] = {}
+    for tid, tweet in tweets_by_id.items():
+        parent_id = tweet.get("reply_to_tweet_id")
+        if parent_id and parent_id in tweet_set:
+            if parent_id not in children_by_parent:
+                children_by_parent[parent_id] = []
+            children_by_parent[parent_id].append(tid)
+
+    # Sort children by created_at for deterministic ordering
+    for parent_id in children_by_parent:
+        children_by_parent[parent_id].sort(
+            key=lambda tid: tweets_by_id[tid].get("created_at") or ""
+        )
+
+    # Compute max depth from each node (memoized)
+    max_depth_cache: dict[str, int] = {}
+
+    def get_max_depth(tid: str) -> int:
+        if tid in max_depth_cache:
+            return max_depth_cache[tid]
+
+        children = children_by_parent.get(tid, [])
+        if not children:
+            max_depth_cache[tid] = 1
+            return 1
+
+        child_depths = [get_max_depth(c) for c in children]
+        max_depth_cache[tid] = 1 + max(child_depths)
+        return max_depth_cache[tid]
+
+    # Precompute all depths
+    for tid in tweets_by_id:
+        get_max_depth(tid)
+
+    # Build the chain starting from root
+    chain_tweets = []
+    hidden_replies: dict[str, int] = {}
+    current_id: str | None = root_id
+
+    while current_id:
+        chain_tweets.append(tweets_by_id[current_id])
+
+        children = children_by_parent.get(current_id, [])
+        if not children:
+            break
+
+        # Get depths of all children
+        child_depths = [(c, get_max_depth(c)) for c in children]
+
+        # Find max depth
+        max_child_depth = max(d for _, d in child_depths)
+
+        # Find children with max depth
+        best_children = [c for c, d in child_depths if d == max_child_depth]
+
+        # Count hidden siblings
+        hidden_count = len(children) - 1
+        if hidden_count > 0:
+            hidden_replies[current_id] = hidden_count
+
+        if len(best_children) == 1:
+            # Unambiguous - continue with this child
+            current_id = best_children[0]
+        else:
+            # Tie - stop the chain here
+            if len(best_children) > 1:
+                hidden_replies[current_id] = len(children)
+            break
+
+    return {
+        "chain": chain_tweets,
+        "hidden_replies": hidden_replies,
+    }
+
+
 def compute_conversation_chains(
     tweet_ids: list[str],
     mode_id: str,
