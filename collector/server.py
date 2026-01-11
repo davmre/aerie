@@ -7,6 +7,10 @@ and stores them in SQLite for later classification.
 """
 
 import json
+import os
+import threading
+import time
+from typing import Optional
 
 from flask import Flask, request, jsonify, render_template
 from database import (
@@ -16,19 +20,122 @@ from database import (
     create_mode, update_mode, delete_mode, get_mode_label_counts, list_prompts,
     get_prompt, get_mode_decisions_batch, invalidate_mode_decisions,
 )
-from modes import decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes, get_mode_stats, compute_mode_decisions
+from modes import (
+    decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes,
+    get_mode_stats, compute_mode_decisions, compute_mode_decisions_for_tweets,
+)
 from classifier import setup_prompts_and_modes
 from extractors import list_extractor_schemas, get_extractor_with_config, EXTRACTOR_SCHEMAS
 from prefilters import list_prefilter_schemas, get_prefilter_with_config, PREFILTER_SCHEMAS
+from classification_queue import get_classification_queue, Priority
+from batch_classifier import classify_and_store_batch
 
 app = Flask(__name__)
+
+# =============================================================================
+# Classification Worker Configuration
+# =============================================================================
+
+CLASSIFICATION_CONFIG = {
+    "enabled": True,
+    "batch_size": 10,
+    "batch_timeout": 0.2,  # seconds to wait for batch to fill
+    "model": "claude-sonnet-4-20250514",
+    "default_prompt_id": "binary_filter_v1",
+}
+
+_worker_thread: Optional[threading.Thread] = None
+_worker_lock = threading.Lock()
+
+
+def start_classification_worker():
+    """Start the background classification worker thread."""
+    global _worker_thread
+
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return  # Already running
+
+        if not CLASSIFICATION_CONFIG["enabled"]:
+            print("[Worker] Classification worker disabled")
+            return
+
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            print("[Worker] No ANTHROPIC_API_KEY, classification worker disabled")
+            return
+
+        def worker_loop():
+            print("[Worker] Classification worker started")
+            queue = get_classification_queue()
+
+            while True:
+                try:
+                    # Get a batch of jobs (waits up to batch_timeout for more)
+                    jobs = queue.get_batch(
+                        max_size=CLASSIFICATION_CONFIG["batch_size"],
+                        timeout=CLASSIFICATION_CONFIG["batch_timeout"],
+                    )
+
+                    if not jobs:
+                        # No jobs available, sleep briefly and retry
+                        time.sleep(0.1)
+                        continue
+
+                    # Group jobs by prompt_id (most modes use the same prompt)
+                    by_prompt: dict[str, list] = {}
+                    for job in jobs:
+                        if job.prompt_id not in by_prompt:
+                            by_prompt[job.prompt_id] = []
+                        by_prompt[job.prompt_id].append(job)
+
+                    all_tweet_ids = []
+
+                    for prompt_id, prompt_jobs in by_prompt.items():
+                        tweet_ids = [j.tweet_id for j in prompt_jobs]
+                        all_tweet_ids.extend(tweet_ids)
+
+                        # Get tweet data
+                        tweets = get_tweets_batch(tweet_ids)
+                        tweets_list = [tweets[tid] for tid in tweet_ids if tid in tweets]
+
+                        if not tweets_list:
+                            continue
+
+                        # Classify the batch
+                        print(f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}")
+                        results = classify_and_store_batch(
+                            tweets_list,
+                            prompt_id,
+                            model=CLASSIFICATION_CONFIG["model"],
+                        )
+
+                        # Log results
+                        success = sum(1 for r in results.values() if "_error" not in r)
+                        errors = len(results) - success
+                        if errors > 0:
+                            print(f"[Worker] Classified: {success} success, {errors} errors")
+
+                    # Update mode decisions for all classified tweets
+                    if all_tweet_ids:
+                        compute_mode_decisions_for_tweets(all_tweet_ids)
+
+                    # Mark jobs as complete
+                    queue.mark_complete([j.tweet_id for j in jobs])
+
+                except Exception as e:
+                    print(f"[Worker] Error: {e}")
+                    time.sleep(1)  # Backoff on error
+
+        _worker_thread = threading.Thread(target=worker_loop, daemon=True)
+        _worker_thread.start()
 
 
 @app.before_request
 def ensure_db():
-    """Initialize database on first request."""
+    """Initialize database and start worker on first request."""
     if not hasattr(app, '_db_initialized'):
         setup_prompts_and_modes()  # Also initializes database
+        start_classification_worker()  # Start background classification
         app._db_initialized = True
 
 
@@ -67,6 +174,13 @@ def receive_tweets():
     if retweets:
         rt_result = store_retweets(retweets)
 
+    # Queue newly inserted tweets for classification (NORMAL priority)
+    if result["inserted"] > 0:
+        queue = get_classification_queue()
+        prompt_id = CLASSIFICATION_CONFIG["default_prompt_id"]
+        tweet_ids = [t["id"] for t in tweets if "id" in t]
+        queued = queue.enqueue_batch(tweet_ids, prompt_id, Priority.NORMAL)
+
     return jsonify({
         "status": "ok",
         "received": len(tweets),
@@ -99,6 +213,8 @@ def check_tweets():
     Check the approval status of multiple tweets.
     Expects JSON body: {"ids": ["123", "456", ...], "mode": "mode_id"}
     Returns: {"123": "approved", "456": "pending", ...}
+
+    Pending tweets are automatically queued for classification with HIGH priority.
     """
     if request.method == "OPTIONS":
         return "", 204
@@ -117,6 +233,18 @@ def check_tweets():
         statuses = decide_tweets_batch(ids, mode_id)
     except KeyError as e:
         return jsonify({"error": str(e)}), 400
+
+    # Queue pending/unknown tweets for classification with HIGH priority
+    # (these are actively visible on the user's screen)
+    pending_ids = [
+        tid for tid, status in statuses.items()
+        if status in ("pending", "unknown")
+    ]
+    if pending_ids:
+        queue = get_classification_queue()
+        mode = get_mode(mode_id)
+        prompt_id = mode["prompt_id"] if mode else CLASSIFICATION_CONFIG["default_prompt_id"]
+        queue.enqueue_batch(pending_ids, prompt_id, Priority.HIGH)
 
     return jsonify(statuses)
 

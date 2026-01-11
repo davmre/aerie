@@ -306,9 +306,47 @@ def my_whitelist(tweet: dict) -> bool | None:
     return None  # Let LLM decide
 ```
 
+## Real-Time Classification
+
+The server includes a background worker that automatically classifies tweets as they're captured or checked:
+
+```
+POST /tweets (capture)              POST /tweets/check
+    │                                    │
+    ├─ Store tweets                      ├─ Return cached status
+    └─ Queue (NORMAL priority)           └─ Queue pending (HIGH priority)
+                    │                              │
+                    └──────────┬───────────────────┘
+                               ▼
+                    ┌─────────────────────┐
+                    │ Background Worker    │
+                    │ (daemon thread)      │
+                    │                      │
+                    │ - Batches 10 tweets  │
+                    │ - Single LLM request │
+                    │ - Updates decisions  │
+                    └─────────────────────┘
+```
+
+**Requirements:**
+- Set `ANTHROPIC_API_KEY` environment variable
+- Worker starts automatically on first request
+
+**Configuration** (in `server.py`):
+```python
+CLASSIFICATION_CONFIG = {
+    "enabled": True,
+    "batch_size": 10,
+    "batch_timeout": 0.2,  # seconds
+    "model": "claude-sonnet-4-20250514",
+}
+```
+
+**Cost efficiency:** Batching 10 tweets per LLM request reduces costs by ~72% compared to single-tweet requests.
+
 ## TODO
 
-- [ ] Background/scheduled classification (cron or daemon)
+- [x] Background/scheduled classification (cron or daemon)
 - [ ] Extension support for mode switching
 - [ ] Evaluation metrics for human labels vs model predictions
 - [ ] Batch API calls for efficiency (messages batches API)

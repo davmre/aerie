@@ -382,3 +382,117 @@ def get_mode_stats(
         raise KeyError(f"Mode not found: {mode_id}")
 
     return get_cached_decision_stats(mode_id, db_path)
+
+
+def compute_mode_decisions_for_tweets(
+    tweet_ids: list[str],
+    model: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, dict[str, str]]:
+    """
+    Compute and cache decisions for specific tweets across all modes.
+
+    This is more efficient than compute_all_mode_decisions() when you only
+    need to update decisions for a small set of tweets (e.g., after
+    classifying a batch).
+
+    Args:
+        tweet_ids: List of tweet IDs to compute decisions for.
+        model: Optional model filter for prompt responses.
+        db_path: Database path.
+
+    Returns:
+        Dict mapping tweet_id -> {mode_id: decision} for all modes.
+    """
+    if not tweet_ids:
+        return {}
+
+    modes = list_modes(db_path)
+    if not modes:
+        return {}
+
+    # Get all tweets
+    tweets = get_tweets_batch(tweet_ids, db_path)
+    if not tweets:
+        return {}
+
+    # Collect all unique prompt_ids we need responses for
+    prompt_ids = set(m["prompt_id"] for m in modes)
+
+    # Get prompt responses for all tweets and prompts
+    responses_by_prompt = {}
+    for prompt_id in prompt_ids:
+        responses_by_prompt[prompt_id] = get_prompt_responses_batch(
+            tweet_ids, prompt_id, model, db_path
+        )
+
+    # Track results and decisions to store
+    results: dict[str, dict[str, str]] = {tid: {} for tid in tweet_ids}
+    decisions_to_store = []
+
+    for mode in modes:
+        mode_id = mode["id"]
+        prompt_id = mode["prompt_id"]
+
+        # Parse configs
+        prefilter_config = _parse_config(mode.get("prefilter_config"))
+        extractor_config = _parse_config(mode.get("extractor_config"))
+
+        prefilter_fn = get_prefilter_with_config(
+            mode["prefilter"], prefilter_config
+        ) if mode["prefilter"] else None
+        extractor_fn = get_extractor_with_config(mode["extractor"], extractor_config)
+
+        responses = responses_by_prompt.get(prompt_id, {})
+
+        for tweet_id in tweet_ids:
+            if tweet_id not in tweets:
+                continue
+
+            tweet = tweets[tweet_id]
+
+            # Try prefilter first
+            if prefilter_fn:
+                prefilter_result = prefilter_fn(tweet)
+                if prefilter_result is not None:
+                    decision = "approved" if prefilter_result else "filtered"
+                    results[tweet_id][mode_id] = decision
+                    decisions_to_store.append({
+                        "tweet_id": tweet_id,
+                        "mode_id": mode_id,
+                        "decision": decision,
+                        "source": "prefilter",
+                    })
+                    continue
+
+            # Need prompt response for extractor
+            if tweet_id not in responses:
+                # No response yet, leave as pending (don't store anything)
+                continue
+
+            response_record = responses[tweet_id]
+            response = response_record["response"]
+
+            # Check for error responses
+            if isinstance(response, dict) and response.get("_error"):
+                continue  # Leave as pending
+
+            # Apply extractor
+            try:
+                approved = extractor_fn(response)
+                decision = "approved" if approved else "filtered"
+                results[tweet_id][mode_id] = decision
+                decisions_to_store.append({
+                    "tweet_id": tweet_id,
+                    "mode_id": mode_id,
+                    "decision": decision,
+                    "source": "extractor",
+                })
+            except Exception:
+                continue  # Leave as pending on error
+
+    # Store all decisions
+    if decisions_to_store:
+        store_mode_decisions_batch(decisions_to_store, db_path)
+
+    return results
