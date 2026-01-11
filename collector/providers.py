@@ -120,19 +120,31 @@ class LLMProvider(ABC):
         """
         Parse batch classification response into per-tweet results.
 
+        The LLM returns indices (1, 2, 3...) which we map back to actual tweet IDs.
         Returns a dict mapping tweet_id -> response dict.
         """
         results: dict[str, dict[str, Any]] = {}
+
+        def index_to_tweet_id(index: int) -> str | None:
+            """Convert 1-based index to tweet ID, or None if invalid."""
+            if 1 <= index <= len(expected_ids):
+                return expected_ids[index - 1]
+            return None
 
         def extract_from_list(parsed: list) -> None:
             """Extract results from a parsed JSON list."""
             for item in parsed:
                 if isinstance(item, dict) and "id" in item:
-                    tweet_id = str(item["id"])
-                    results[tweet_id] = {
-                        "approved": bool(item.get("approved", False)),
-                        "reason": str(item.get("reason", "")),
-                    }
+                    try:
+                        index = int(item["id"])
+                        tweet_id = index_to_tweet_id(index)
+                        if tweet_id:
+                            results[tweet_id] = {
+                                "approved": bool(item.get("approved", False)),
+                                "reason": str(item.get("reason", "")),
+                            }
+                    except (ValueError, TypeError):
+                        continue
 
         # Try to parse as JSON array
         try:
@@ -159,12 +171,14 @@ class LLMProvider(ABC):
                 try:
                     obj = json.loads(obj_match.group())
                     if "id" in obj:
-                        tweet_id = str(obj["id"])
-                        results[tweet_id] = {
-                            "approved": bool(obj.get("approved", False)),
-                            "reason": str(obj.get("reason", "")),
-                        }
-                except json.JSONDecodeError:
+                        index = int(obj["id"])
+                        tweet_id = index_to_tweet_id(index)
+                        if tweet_id:
+                            results[tweet_id] = {
+                                "approved": bool(obj.get("approved", False)),
+                                "reason": str(obj.get("reason", "")),
+                            }
+                except (json.JSONDecodeError, ValueError, TypeError):
                     continue
 
         # Mark any missing tweets as errors

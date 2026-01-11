@@ -35,7 +35,7 @@ def author_whitelist(tweet: dict[str, Any]) -> bool | None:
     Always show tweets from whitelisted authors.
     Always hide tweets from blacklisted authors.
     """
-    username = tweet.get("author_username", "").lower()
+    username = (tweet.get("author_username") or "").lower()
     if username in {u.lower() for u in WHITELIST_AUTHORS}:
         return True
     if username in {u.lower() for u in BLACKLIST_AUTHORS}:
@@ -57,7 +57,7 @@ def make_author_filter(whitelist: set[str] | None = None, blacklist: set[str] | 
     blacklist = {u.lower() for u in (blacklist or set())}
 
     def prefilter(tweet: dict[str, Any]) -> bool | None:
-        username = tweet.get("author_username", "").lower()
+        username = (tweet.get("author_username") or "").lower()
         if username in whitelist:
             return True
         if username in blacklist:
@@ -142,7 +142,7 @@ def keyword_filter(show_keywords: set[str] | None = None, hide_keywords: set[str
     hide_keywords = {k.lower() for k in (hide_keywords or set())}
 
     def prefilter(tweet: dict[str, Any]) -> bool | None:
-        text_lower = tweet.get("text", "").lower()
+        text_lower = (tweet.get("text") or "").lower()
 
         # Check hide keywords first (blacklist takes precedence)
         for kw in hide_keywords:

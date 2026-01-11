@@ -9,7 +9,7 @@ requests.
 from pathlib import Path
 
 from database import DEFAULT_DB_PATH, get_prompt, store_prompt_response
-from providers import LLMProvider, get_default_provider, get_provider
+from providers import get_default_provider, get_provider
 
 
 # Re-export parse_batch_response for backwards compatibility with existing code
@@ -28,9 +28,8 @@ def format_tweet_for_batch(tweet: dict, index: int) -> str:
     """Format a single tweet for inclusion in a batch request."""
     parts = []
 
-    # Header with index and ID
-    tweet_id = tweet.get("id", "unknown")
-    parts.append(f"[{index}] ID: {tweet_id}")
+    # Header with just the index (no full tweet ID - simpler for LLM to echo back)
+    parts.append(f"[Tweet {index}]")
 
     # Author info
     author = tweet.get("author_username") or "unknown"
@@ -91,14 +90,14 @@ def build_batch_prompt(base_prompt: str) -> str:
 You will be given multiple tweets to classify. For each tweet, provide your classification.
 
 IMPORTANT: Respond with ONLY a JSON array. Each element must have:
-- "id": the tweet ID (from the ID: line)
+- "id": the tweet number (1, 2, 3, etc.)
 - "approved": boolean (true to show, false to hide)
 - "reason": brief explanation (1 sentence)
 
 Example response format:
 [
-  {{"id": "123456", "approved": true, "reason": "Informative tech discussion"}},
-  {{"id": "789012", "approved": false, "reason": "Engagement bait"}}
+  {{"id": 1, "approved": true, "reason": "Informative tech discussion"}},
+  {{"id": 2, "approved": false, "reason": "Engagement bait"}}
 ]"""
 
 

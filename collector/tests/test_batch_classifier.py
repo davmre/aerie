@@ -15,7 +15,7 @@ class TestTweetFormatting:
     """Tests for tweet formatting functions."""
 
     def test_format_tweet_basic(self):
-        """Basic tweet formatting includes ID, author, and text."""
+        """Basic tweet formatting includes index, author, and text."""
         tweet = {
             "id": "123456",
             "text": "Hello world!",
@@ -25,9 +25,11 @@ class TestTweetFormatting:
 
         result = format_tweet_for_batch(tweet, 1)
 
-        assert "[1] ID: 123456" in result
+        assert "[Tweet 1]" in result
         assert "@testuser (Test User)" in result
         assert "Hello world!" in result
+        # Full tweet ID should NOT be in the output (simpler for LLM)
+        assert "123456" not in result
 
     def test_format_tweet_with_verified(self):
         """Verified authors get a [verified] tag."""
@@ -99,8 +101,8 @@ class TestTweetFormatting:
 
         result = format_tweets_batch(tweets)
 
-        assert "[1] ID: 1" in result
-        assert "[2] ID: 2" in result
+        assert "[Tweet 1]" in result
+        assert "[Tweet 2]" in result
         assert "First" in result
         assert "Second" in result
 
@@ -120,73 +122,97 @@ class TestBatchPrompt:
 
 
 class TestResponseParsing:
-    """Tests for parsing LLM responses."""
+    """Tests for parsing LLM responses.
+
+    Note: The LLM returns indices (1, 2, 3...) which are mapped back to actual
+    tweet IDs from the expected_ids list.
+    """
 
     def test_parse_valid_json_array(self):
-        """Parse a well-formed JSON array response."""
+        """Parse a well-formed JSON array response with indices."""
+        # LLM returns indices 1 and 2, which map to the expected_ids
         response = """[
-            {"id": "123", "approved": true, "reason": "Good content"},
-            {"id": "456", "approved": false, "reason": "Spam"}
+            {"id": 1, "approved": true, "reason": "Good content"},
+            {"id": 2, "approved": false, "reason": "Spam"}
         ]"""
 
-        result = parse_batch_response(response, ["123", "456"])
+        result = parse_batch_response(response, ["tweet_123", "tweet_456"])
 
-        assert result["123"]["approved"] is True
-        assert result["123"]["reason"] == "Good content"
-        assert result["456"]["approved"] is False
-        assert result["456"]["reason"] == "Spam"
+        assert result["tweet_123"]["approved"] is True
+        assert result["tweet_123"]["reason"] == "Good content"
+        assert result["tweet_456"]["approved"] is False
+        assert result["tweet_456"]["reason"] == "Spam"
 
     def test_parse_json_with_surrounding_text(self):
         """Parse JSON array even with surrounding text."""
         response = """Here are my classifications:
 
         [
-            {"id": "123", "approved": true, "reason": "Informative"}
+            {"id": 1, "approved": true, "reason": "Informative"}
         ]
 
         Let me know if you need anything else."""
 
-        result = parse_batch_response(response, ["123"])
+        result = parse_batch_response(response, ["tweet_123"])
 
-        assert result["123"]["approved"] is True
+        assert result["tweet_123"]["approved"] is True
 
     def test_parse_marks_missing_tweets_as_error(self):
         """Missing tweets are marked with error."""
-        response = '[{"id": "123", "approved": true, "reason": "Good"}]'
+        # Only index 1 returned, index 2 is missing
+        response = '[{"id": 1, "approved": true, "reason": "Good"}]'
 
-        result = parse_batch_response(response, ["123", "456"])
+        result = parse_batch_response(response, ["tweet_123", "tweet_456"])
 
-        assert result["123"]["approved"] is True
-        assert "_error" in result["456"]
+        assert result["tweet_123"]["approved"] is True
+        assert "_error" in result["tweet_456"]
 
     def test_parse_handles_malformed_json(self):
         """Malformed JSON returns errors for all expected tweets."""
         response = "This is not JSON at all"
 
-        result = parse_batch_response(response, ["123", "456"])
+        result = parse_batch_response(response, ["tweet_123", "tweet_456"])
 
-        assert "_error" in result["123"]
-        assert "_error" in result["456"]
+        assert "_error" in result["tweet_123"]
+        assert "_error" in result["tweet_456"]
 
     def test_parse_extracts_individual_objects(self):
         """Can extract individual JSON objects when array parsing fails."""
-        response = """Tweet 1: {"id": "123", "approved": true, "reason": "Good"}
-        Tweet 2: {"id": "456", "approved": false, "reason": "Bad"}"""
+        response = """Tweet 1: {"id": 1, "approved": true, "reason": "Good"}
+        Tweet 2: {"id": 2, "approved": false, "reason": "Bad"}"""
 
-        result = parse_batch_response(response, ["123", "456"])
+        result = parse_batch_response(response, ["tweet_123", "tweet_456"])
 
-        assert result["123"]["approved"] is True
-        assert result["456"]["approved"] is False
+        assert result["tweet_123"]["approved"] is True
+        assert result["tweet_456"]["approved"] is False
 
     def test_parse_coerces_types(self):
         """Values are coerced to expected types."""
-        response = '[{"id": 123, "approved": 1, "reason": 42}]'
+        # Index can be int or string "1"
+        response = '[{"id": "1", "approved": 1, "reason": 42}]'
 
-        result = parse_batch_response(response, ["123"])
+        result = parse_batch_response(response, ["tweet_123"])
 
-        # id should be string, approved should be bool, reason should be string
-        assert result["123"]["approved"] is True
-        assert result["123"]["reason"] == "42"
+        # approved should be bool, reason should be string
+        assert result["tweet_123"]["approved"] is True
+        assert result["tweet_123"]["reason"] == "42"
+
+    def test_parse_filters_invalid_indices(self):
+        """Invalid indices from LLM are filtered out to prevent FK violations."""
+        # LLM returns index 99 which is out of range (only 2 tweets)
+        response = """[
+            {"id": 1, "approved": true, "reason": "Good"},
+            {"id": 99, "approved": true, "reason": "Invalid index"},
+            {"id": 2, "approved": false, "reason": "Bad"}
+        ]"""
+
+        result = parse_batch_response(response, ["tweet_123", "tweet_456"])
+
+        # Valid indices should map to tweet IDs
+        assert result["tweet_123"]["approved"] is True
+        assert result["tweet_456"]["approved"] is False
+        # Invalid index should not create an entry
+        assert len(result) == 2
 
 
 class TestClassifyTweetsBatch:
