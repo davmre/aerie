@@ -15,7 +15,7 @@ from flask import Flask, current_app, jsonify, render_template, request
 
 from batch_classifier import classify_and_store_batch
 from classification_queue import Priority, get_classification_queue
-from classifier import setup_prompts_and_modes
+from classifier import format_tweet_for_classification, setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
@@ -990,6 +990,9 @@ def create_app(config=None):
             # Add thread context if this is a reply
             if tweet.get("reply_to_tweet_id"):
                 tweet["thread_ancestors"] = thread_context.get(tid, [])
+
+            # Add the exact text as rendered for the LLM classifier
+            tweet["llm_input"] = format_tweet_for_classification(tweet)
 
         return jsonify({"tweets": tweets, "total": total})
 
