@@ -261,8 +261,3 @@ python classifier.py modes                    # List modes
 **Built-in prompts:** `binary_filter_v1` (yes/no filter), `topic_tagger_v1` (topics + quality scores)
 
 **Custom modes:** Create via web UI at `/ui/modes` or CLI. Modes combine a prompt with an extractor and optional prefilter. See `extractors.py` and `prefilters.py` for examples.
-
-## TODO
-
-- [ ] Extension support for mode switching
-- [ ] Evaluation metrics for human labels vs model predictions
