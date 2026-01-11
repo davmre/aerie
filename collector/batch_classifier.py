@@ -110,51 +110,48 @@ def parse_batch_response(
     """
     results = {}
 
+    def extract_from_list(parsed: list) -> None:
+        """Extract results from a parsed JSON list."""
+        for item in parsed:
+            if isinstance(item, dict) and "id" in item:
+                tweet_id = str(item["id"])
+                results[tweet_id] = {
+                    "approved": bool(item.get("approved", False)),
+                    "reason": str(item.get("reason", "")),
+                }
+
     # Try to parse as JSON array
     try:
-        # First try direct parse
         parsed = json.loads(response_text.strip())
         if isinstance(parsed, list):
-            for item in parsed:
-                if isinstance(item, dict) and "id" in item:
-                    tweet_id = str(item["id"])
-                    results[tweet_id] = {
-                        "approved": bool(item.get("approved", False)),
-                        "reason": str(item.get("reason", "")),
-                    }
-            return results
+            extract_from_list(parsed)
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON array in the response
-    array_match = re.search(r'\[[\s\S]*\]', response_text)
-    if array_match:
-        try:
-            parsed = json.loads(array_match.group())
-            if isinstance(parsed, list):
-                for item in parsed:
-                    if isinstance(item, dict) and "id" in item:
-                        tweet_id = str(item["id"])
-                        results[tweet_id] = {
-                            "approved": bool(item.get("approved", False)),
-                            "reason": str(item.get("reason", "")),
-                        }
-                return results
-        except json.JSONDecodeError:
-            pass
+    # If direct parse didn't work, try to find JSON array in the response
+    if not results:
+        array_match = re.search(r'\[[\s\S]*\]', response_text)
+        if array_match:
+            try:
+                parsed = json.loads(array_match.group())
+                if isinstance(parsed, list):
+                    extract_from_list(parsed)
+            except json.JSONDecodeError:
+                pass
 
-    # Try to extract individual JSON objects
-    for obj_match in re.finditer(r'\{[^{}]*"id"\s*:\s*"?(\d+)"?[^{}]*\}', response_text):
-        try:
-            obj = json.loads(obj_match.group())
-            if "id" in obj:
-                tweet_id = str(obj["id"])
-                results[tweet_id] = {
-                    "approved": bool(obj.get("approved", False)),
-                    "reason": str(obj.get("reason", "")),
-                }
-        except json.JSONDecodeError:
-            continue
+    # If still no results, try to extract individual JSON objects
+    if not results:
+        for obj_match in re.finditer(r'\{[^{}]*"id"\s*:\s*"?(\d+)"?[^{}]*\}', response_text):
+            try:
+                obj = json.loads(obj_match.group())
+                if "id" in obj:
+                    tweet_id = str(obj["id"])
+                    results[tweet_id] = {
+                        "approved": bool(obj.get("approved", False)),
+                        "reason": str(obj.get("reason", "")),
+                    }
+            except json.JSONDecodeError:
+                continue
 
     # Mark any missing tweets as errors
     for tweet_id in expected_ids:
