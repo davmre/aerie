@@ -449,7 +449,9 @@ function renderChainTweet(tweet, hiddenReplyCount) {
                 </div>
             </div>
 
-            <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_TOPLEVEL, true, tweet.urls)}</div>
+            <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_TOPLEVEL, true, tweet.urls_json, tweet.media_json)}</div>
+
+            ${renderMedia(tweet.media_json)}
 
             ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
 
@@ -518,7 +520,8 @@ async function loadRepliesIntoModal(tweetId) {
                         <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
                     </div>
                 </div>
-                <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_CONTEXT, true, tweet.urls_json, tweet.media_json)}</div>
+                ${renderMedia(tweet.media_json)}
                 ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
             </div>
         `;
@@ -545,7 +548,8 @@ async function loadRepliesIntoModal(tweetId) {
                                 <a href="${replyUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(reply.created_at)}</a>
                             </div>
                         </div>
-                        <div class="tweet-text">${renderCollapsibleText(reply.text || '', TEXT_LIMIT_TOPLEVEL)}</div>
+                        <div class="tweet-text">${renderCollapsibleText(reply.text || '', TEXT_LIMIT_TOPLEVEL, true, reply.urls_json, reply.media_json)}</div>
+                        ${renderMedia(reply.media_json)}
                         ${reply.quoted_tweet ? renderQuotedTweet(reply.quoted_tweet) : ''}
                         ${replyCount > 0 ? `
                             <div class="modal-reply-count" onclick="navigateToReplies('${reply.id}')">

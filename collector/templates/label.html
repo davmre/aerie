@@ -160,7 +160,9 @@ function renderTweet(tweet, index) {
                 </div>
             </div>
 
-            <div class="tweet-text">${renderTextWithUrls(tweet.text || '', tweet.urls)}</div>
+            <div class="tweet-text">${renderTextWithUrls(tweet.text || '', tweet.urls_json, tweet.media_json)}</div>
+
+            ${renderMedia(tweet.media_json)}
 
             ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
 

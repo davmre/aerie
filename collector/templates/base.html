@@ -265,6 +265,98 @@
             word-wrap: break-word;
         }
 
+        /* Media display */
+        .tweet-media {
+            margin-top: 12px;
+        }
+
+        .media-placeholder {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 16px;
+            background: var(--bg-nested);
+            border: 1px dashed var(--border-secondary);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .media-placeholder:hover {
+            background: var(--bg-button-hover);
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .media-placeholder-icon {
+            font-size: 1.2rem;
+        }
+
+        .media-grid {
+            display: grid;
+            gap: 4px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .media-grid.single {
+            grid-template-columns: 1fr;
+        }
+
+        .media-grid.double {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .media-grid.triple {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+        }
+
+        .media-grid.triple .media-item:first-child {
+            grid-row: span 2;
+        }
+
+        .media-grid.quad {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+        }
+
+        .media-item {
+            position: relative;
+            overflow: hidden;
+            background: var(--bg-nested);
+        }
+
+        .media-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        .media-grid.single .media-item img {
+            max-height: 400px;
+            object-fit: contain;
+            background: var(--bg-nested);
+        }
+
+        .media-grid:not(.single) .media-item {
+            aspect-ratio: 1;
+        }
+
+        .media-video-overlay {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.4);
+            color: white;
+            font-size: 2rem;
+        }
+
         /* Collapsible text */
         .text-toggle {
             color: var(--accent);
@@ -630,9 +722,29 @@
             }
         }
 
-        function renderTextWithUrls(text, urls) {
+        // Check if a URL points to Twitter media (photo/video)
+        function isMediaUrl(url) {
+            if (!url) return false;
+            return /\/(photo|video)\/\d+/.test(url) &&
+                   /(twitter\.com|x\.com)/.test(url);
+        }
+
+        function renderTextWithUrls(text, urls, mediaJson = null) {
             if (!text) return '';
             let result = escapeHtml(text);
+
+            // Build set of media expanded_urls to strip
+            let mediaUrls = new Set();
+            if (mediaJson) {
+                try {
+                    const media = typeof mediaJson === 'string' ? JSON.parse(mediaJson) : mediaJson;
+                    if (Array.isArray(media)) {
+                        media.forEach(m => {
+                            if (m.expanded_url) mediaUrls.add(m.expanded_url);
+                        });
+                    }
+                } catch (e) {}
+            }
 
             // Parse URLs from the tweet's urls field if available
             if (urls) {
@@ -644,10 +756,15 @@
                             const expandedUrl = u.expanded_url || u.url;
                             const displayUrl = u.display_url || expandedUrl;
                             if (shortUrl && expandedUrl) {
-                                result = result.replace(
-                                    shortUrl,
-                                    `<a href="${escapeHtml(expandedUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(displayUrl)}</a>`
-                                );
+                                // Strip media URLs entirely (we show them separately)
+                                if (mediaUrls.has(expandedUrl) || isMediaUrl(expandedUrl)) {
+                                    result = result.replace(shortUrl, '');
+                                } else {
+                                    result = result.replace(
+                                        shortUrl,
+                                        `<a href="${escapeHtml(expandedUrl)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(displayUrl)}</a>`
+                                    );
+                                }
                             }
                         }
                     }
@@ -657,14 +774,20 @@
             }
 
             // Also find any remaining URLs not in the urls list
+            // Exclude " from URL chars to avoid matching URLs inside href="..."
             result = result.replace(
-                /(https?:\/\/[^\s<]+)/g,
+                /(https?:\/\/[^\s<"]+)/g,
                 (match) => {
                     // Don't double-wrap already-linked URLs
                     if (result.indexOf(`href="${match}"`) !== -1) return match;
+                    // Strip media URLs
+                    if (isMediaUrl(match)) return '';
                     return `<a href="${match}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${match}</a>`;
                 }
             );
+
+            // Clean up any trailing whitespace from stripped URLs
+            result = result.replace(/\s+$/, '');
 
             return result;
         }
@@ -678,16 +801,17 @@
          * @param {number} maxLength - Max characters before truncating (0 = no limit)
          * @param {boolean} processUrls - Whether to process URLs (for main tweet text)
          * @param {object} urls - URL metadata for expansion (only used if processUrls=true)
+         * @param {object} mediaJson - Media metadata to strip media URLs (only used if processUrls=true)
          * @returns {string} HTML string
          */
-        function renderCollapsibleText(text, maxLength, processUrls = false, urls = null) {
+        function renderCollapsibleText(text, maxLength, processUrls = false, urls = null, mediaJson = null) {
             if (!text) return '';
 
             const needsTruncation = maxLength > 0 && text.length > maxLength;
             const id = `collapsible-${collapsibleIdCounter++}`;
 
             if (!needsTruncation) {
-                return processUrls ? renderTextWithUrls(text, urls) : escapeHtml(text);
+                return processUrls ? renderTextWithUrls(text, urls, mediaJson) : escapeHtml(text);
             }
 
             // Find a good break point (word boundary) near maxLength
@@ -701,8 +825,8 @@
             const fullText = text;
 
             // For truncated text, we escape/process both versions
-            const truncatedHtml = processUrls ? renderTextWithUrls(truncatedText, urls) : escapeHtml(truncatedText);
-            const fullHtml = processUrls ? renderTextWithUrls(fullText, urls) : escapeHtml(fullText);
+            const truncatedHtml = processUrls ? renderTextWithUrls(truncatedText, urls, mediaJson) : escapeHtml(truncatedText);
+            const fullHtml = processUrls ? renderTextWithUrls(fullText, urls, mediaJson) : escapeHtml(fullText);
 
             return `<span id="${id}-truncated">${truncatedHtml}... <span class="text-toggle" onclick="toggleText('${id}', event)">show more</span></span><span id="${id}-full" style="display: none;">${fullHtml} <span class="text-toggle" onclick="toggleText('${id}', event)">show less</span></span>`;
         }
@@ -734,7 +858,8 @@
                         <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
                         <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                     </div>
-                    <div class="quoted-tweet-text">${renderCollapsibleText(qt.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                    <div class="quoted-tweet-text">${renderCollapsibleText(qt.text || '', TEXT_LIMIT_CONTEXT, true, qt.urls_json, qt.media_json)}</div>
+                    ${renderMedia(qt.media_json)}
                 </div>
             `;
         }
@@ -755,13 +880,95 @@
                                     <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
                                     <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                                 </div>
-                                <div class="thread-ancestor-text">${renderCollapsibleText(a.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                                <div class="thread-ancestor-text">${renderCollapsibleText(a.text || '', TEXT_LIMIT_CONTEXT, true, a.urls_json, a.media_json)}</div>
+                                ${renderMedia(a.media_json)}
                                 ${a.quoted_tweet ? renderQuotedTweet(a.quoted_tweet) : ''}
                             </div>
                         `;
                     }).join('')}
                 </div>
             `;
+        }
+
+        // =================================================================
+        // Media rendering (click-to-load)
+        // =================================================================
+
+        let mediaIdCounter = 0;
+
+        function renderMedia(mediaJson) {
+            if (!mediaJson) return '';
+
+            let media;
+            try {
+                media = typeof mediaJson === 'string' ? JSON.parse(mediaJson) : mediaJson;
+            } catch (e) {
+                return '';
+            }
+
+            if (!Array.isArray(media) || media.length === 0) return '';
+
+            const id = `media-${mediaIdCounter++}`;
+            const photoCount = media.filter(m => m.type === 'photo').length;
+            const videoCount = media.filter(m => m.type === 'video' || m.type === 'animated_gif').length;
+
+            // Build description
+            let desc = [];
+            if (photoCount > 0) desc.push(`${photoCount} image${photoCount > 1 ? 's' : ''}`);
+            if (videoCount > 0) desc.push(`${videoCount} video thumbnail${videoCount > 1 ? 's' : ''}`);
+
+            // Store media data for later loading
+            const mediaData = encodeURIComponent(JSON.stringify(media));
+
+            return `
+                <div class="tweet-media" id="${id}" onclick="event.stopPropagation()">
+                    <div class="media-placeholder" onclick="loadMedia('${id}', '${mediaData}')">
+                        <span class="media-placeholder-icon">${videoCount > 0 ? '▶' : '🖼'}</span>
+                        <span>Click to load ${desc.join(' and ')}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        function loadMedia(containerId, encodedData) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            let media;
+            try {
+                media = JSON.parse(decodeURIComponent(encodedData));
+            } catch (e) {
+                console.error('Failed to parse media data:', e);
+                return;
+            }
+
+            const gridClass = media.length === 1 ? 'single' :
+                              media.length === 2 ? 'double' :
+                              media.length === 3 ? 'triple' : 'quad';
+
+            const items = media.slice(0, 4).map(m => {
+                if (m.type === 'photo') {
+                    return `
+                        <div class="media-item">
+                            <a href="${escapeHtml(m.expanded_url || m.url)}" target="_blank" rel="noopener">
+                                <img src="${escapeHtml(m.url)}" alt="Image" loading="lazy">
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    // Video or animated_gif - show thumbnail with play overlay
+                    return `
+                        <div class="media-item">
+                            <a href="${escapeHtml(m.expanded_url)}" target="_blank" rel="noopener">
+                                <img src="${escapeHtml(m.url)}" alt="Video thumbnail" loading="lazy">
+                                <div class="media-video-overlay">▶</div>
+                            </a>
+                        </div>
+                    `;
+                }
+            }).join('');
+
+            container.innerHTML = `<div class="media-grid ${gridClass}">${items}</div>`;
         }
 
         // =================================================================
