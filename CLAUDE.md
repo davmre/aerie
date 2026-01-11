@@ -231,6 +231,38 @@ source .venv/bin/activate
 4. Check stats: `curl http://localhost:8080/stats`
 5. Run classifier: `cd collector && python classifier.py`
 
+## Parallel Development with Worktrees
+
+The repo uses git worktrees to support multiple Claude Code agents working in parallel:
+
+```
+/Users/dave/code/
+├── aerie/           ← Main clone (live server + extension)
+│   └── .venv/       ← Shared virtualenv
+├── aerie-dev1/      ← Worktree for parallel session
+└── aerie-dev2/      ← Worktree for parallel session
+```
+
+**If you're running in a worktree** (path contains `aerie-dev`), use the shared venv:
+```bash
+source ../aerie/.venv/bin/activate
+```
+
+**Workflow:**
+- Each agent session works in its own worktree on a feature branch
+- Push changes to remote, then merge into main clone for testing
+- The main `aerie/` directory runs the live server and has the extension loaded
+
+**Managing worktrees:**
+```bash
+# Create a new worktree
+git worktree add ../aerie-dev3 -b dev/session3
+
+# Remove when done
+git worktree remove ../aerie-dev1
+git branch -d dev/session1
+```
+
 ## Testing
 
 The collector uses pytest for integration testing. Tests use isolated SQLite databases (via `tmp_path` fixtures) so they don't affect production data.
