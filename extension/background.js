@@ -332,10 +332,42 @@ async function sendToCollector(tweets, retweets = []) {
         ? `, ${result.retweets_inserted} retweets`
         : '';
       console.log(`[Aerie] Stored: ${result.inserted} new, ${result.duplicates} duplicates${rtInfo}`);
+
+      // Immediately check the captured tweets to trigger prefilter evaluation
+      // This ensures prefilter-only modes (like "all tweets") get instant decisions
+      if (tweets.length > 0) {
+        const tweetIds = tweets.map(t => t.id);
+        checkTweetsForPrefilter(tweetIds);
+      }
     }
   } catch (err) {
     // Collector might not be running - that's okay, log and continue
     console.warn(`[Aerie] Could not reach collector: ${err.message}`);
+  }
+}
+
+// Check tweets to trigger prefilter evaluation (non-blocking)
+async function checkTweetsForPrefilter(tweetIds) {
+  try {
+    const checkUrl = `${settings.backendUrl}/tweets/check`;
+    const response = await fetch(checkUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ ids: tweetIds, mode: settings.mode }),
+    });
+
+    if (response.ok) {
+      const statuses = await response.json();
+      const approved = Object.values(statuses).filter(s => s === "approved").length;
+      const filtered = Object.values(statuses).filter(s => s === "filtered").length;
+      const pending = Object.values(statuses).filter(s => s === "pending").length;
+      console.log(`[Aerie] Prefilter check: ${approved} approved, ${filtered} filtered, ${pending} pending`);
+    }
+  } catch (err) {
+    // Non-critical, just log
+    console.warn(`[Aerie] Prefilter check failed: ${err.message}`);
   }
 }
 

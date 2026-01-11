@@ -16,14 +16,14 @@ class TestClassificationQueue:
     def test_enqueue_adds_job(self):
         """Enqueueing a tweet adds it to the queue."""
         queue = ClassificationQueue()
-        assert queue.enqueue("tweet1", "prompt1") is True
+        assert queue.enqueue("tweet1", "prompt1", "mode1") is True
         assert queue.size == 1
 
     def test_enqueue_returns_false_for_duplicate(self):
         """Enqueueing the same tweet twice returns False."""
         queue = ClassificationQueue()
-        assert queue.enqueue("tweet1", "prompt1") is True
-        assert queue.enqueue("tweet1", "prompt1") is False
+        assert queue.enqueue("tweet1", "prompt1", "mode1") is True
+        assert queue.enqueue("tweet1", "prompt1", "mode1") is False
         assert queue.size == 1
 
     def test_priority_ordering(self):
@@ -31,9 +31,9 @@ class TestClassificationQueue:
         queue = ClassificationQueue()
 
         # Add NORMAL priority first
-        queue.enqueue("tweet1", "prompt1", Priority.NORMAL)
+        queue.enqueue("tweet1", "prompt1", "mode1", Priority.NORMAL)
         time.sleep(0.01)  # Ensure different timestamps
-        queue.enqueue("tweet2", "prompt1", Priority.HIGH)
+        queue.enqueue("tweet2", "prompt1", "mode1", Priority.HIGH)
 
         # Get batch - HIGH should come first
         jobs = queue.get_batch(max_size=2, timeout=0.1)
@@ -45,7 +45,7 @@ class TestClassificationQueue:
         """get_batch returns at most max_size jobs."""
         queue = ClassificationQueue()
         for i in range(10):
-            queue.enqueue(f"tweet{i}", "prompt1")
+            queue.enqueue(f"tweet{i}", "prompt1", "mode1")
 
         jobs = queue.get_batch(max_size=3, timeout=0.1)
         assert len(jobs) == 3
@@ -59,8 +59,8 @@ class TestClassificationQueue:
     def test_get_batch_returns_partial_on_timeout(self):
         """get_batch returns available jobs when batch doesn't fill."""
         queue = ClassificationQueue()
-        queue.enqueue("tweet1", "prompt1")
-        queue.enqueue("tweet2", "prompt1")
+        queue.enqueue("tweet1", "prompt1", "mode1")
+        queue.enqueue("tweet2", "prompt1", "mode1")
 
         jobs = queue.get_batch(max_size=10, timeout=0.1)
         assert len(jobs) == 2
@@ -68,23 +68,23 @@ class TestClassificationQueue:
     def test_mark_complete_removes_from_pending(self):
         """mark_complete allows re-enqueueing of completed tweets."""
         queue = ClassificationQueue()
-        queue.enqueue("tweet1", "prompt1")
+        queue.enqueue("tweet1", "prompt1", "mode1")
 
         # Can't enqueue again while pending
-        assert queue.enqueue("tweet1", "prompt1") is False
+        assert queue.enqueue("tweet1", "prompt1", "mode1") is False
 
         # Mark complete
         queue.mark_complete(["tweet1"])
 
         # Now can enqueue again
-        assert queue.enqueue("tweet1", "prompt1") is True
+        assert queue.enqueue("tweet1", "prompt1", "mode1") is True
 
     def test_is_pending(self):
         """is_pending returns True for queued tweets."""
         queue = ClassificationQueue()
         assert queue.is_pending("tweet1") is False
 
-        queue.enqueue("tweet1", "prompt1")
+        queue.enqueue("tweet1", "prompt1", "mode1")
         assert queue.is_pending("tweet1") is True
 
         queue.mark_complete(["tweet1"])
@@ -93,16 +93,16 @@ class TestClassificationQueue:
     def test_enqueue_batch(self):
         """enqueue_batch adds multiple tweets at once."""
         queue = ClassificationQueue()
-        added = queue.enqueue_batch(["t1", "t2", "t3"], "prompt1")
+        added = queue.enqueue_batch(["t1", "t2", "t3"], "prompt1", "mode1")
         assert added == 3
         assert queue.size == 3
 
     def test_enqueue_batch_skips_duplicates(self):
         """enqueue_batch skips already-queued tweets."""
         queue = ClassificationQueue()
-        queue.enqueue("t1", "prompt1")
+        queue.enqueue("t1", "prompt1", "mode1")
 
-        added = queue.enqueue_batch(["t1", "t2", "t3"], "prompt1")
+        added = queue.enqueue_batch(["t1", "t2", "t3"], "prompt1", "mode1")
         assert added == 2  # t1 was already queued
         assert queue.size == 3
 
@@ -110,10 +110,10 @@ class TestClassificationQueue:
         """Queue respects max_size limit for NORMAL priority."""
         queue = ClassificationQueue(max_size=3)
 
-        assert queue.enqueue("t1", "p1", Priority.NORMAL) is True
-        assert queue.enqueue("t2", "p1", Priority.NORMAL) is True
-        assert queue.enqueue("t3", "p1", Priority.NORMAL) is True
-        assert queue.enqueue("t4", "p1", Priority.NORMAL) is False  # Queue full
+        assert queue.enqueue("t1", "p1", "m1", Priority.NORMAL) is True
+        assert queue.enqueue("t2", "p1", "m1", Priority.NORMAL) is True
+        assert queue.enqueue("t3", "p1", "m1", Priority.NORMAL) is True
+        assert queue.enqueue("t4", "p1", "m1", Priority.NORMAL) is False  # Queue full
 
         assert queue.size == 3
         assert queue.dropped_count == 1
@@ -122,13 +122,22 @@ class TestClassificationQueue:
         """HIGH priority items can exceed max_size slightly."""
         queue = ClassificationQueue(max_size=2)
 
-        queue.enqueue("t1", "p1", Priority.NORMAL)
-        queue.enqueue("t2", "p1", Priority.NORMAL)
+        queue.enqueue("t1", "p1", "m1", Priority.NORMAL)
+        queue.enqueue("t2", "p1", "m1", Priority.NORMAL)
         # Queue is now "full" for NORMAL priority
 
         # HIGH priority should still be accepted
-        assert queue.enqueue("t3", "p1", Priority.HIGH) is True
+        assert queue.enqueue("t3", "p1", "m1", Priority.HIGH) is True
         assert queue.size == 3
+
+    def test_job_includes_mode_id(self):
+        """Jobs include the mode_id field."""
+        queue = ClassificationQueue()
+        queue.enqueue("tweet1", "prompt1", "my_mode")
+
+        jobs = queue.get_batch(max_size=1, timeout=0.1)
+        assert len(jobs) == 1
+        assert jobs[0].mode_id == "my_mode"
 
 
 class TestClassificationJob:
@@ -141,12 +150,14 @@ class TestClassificationJob:
             added_at=1.0,
             tweet_id="t1",
             prompt_id="p1",
+            mode_id="m1",
         )
         job_high = ClassificationJob(
             priority=Priority.HIGH,
             added_at=2.0,  # Added later but higher priority
             tweet_id="t2",
             prompt_id="p1",
+            mode_id="m1",
         )
 
         assert job_high < job_normal  # HIGH (1) < NORMAL (2)
@@ -158,12 +169,14 @@ class TestClassificationJob:
             added_at=1.0,
             tweet_id="t1",
             prompt_id="p1",
+            mode_id="m1",
         )
         job_late = ClassificationJob(
             priority=Priority.NORMAL,
             added_at=2.0,
             tweet_id="t2",
             prompt_id="p1",
+            mode_id="m1",
         )
 
         assert job_early < job_late
@@ -180,7 +193,7 @@ class TestThreadSafety:
         def enqueue_range(start, count):
             added = 0
             for i in range(start, start + count):
-                if queue.enqueue(f"tweet{i}", "prompt1"):
+                if queue.enqueue(f"tweet{i}", "prompt1", "mode1"):
                     added += 1
             results.append(added)
 
@@ -203,7 +216,7 @@ class TestThreadSafety:
         def enqueue_same():
             added = 0
             for _ in range(10):
-                if queue.enqueue("same_tweet", "prompt1"):
+                if queue.enqueue("same_tweet", "prompt1", "mode1"):
                     added += 1
             results.append(added)
 

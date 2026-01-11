@@ -84,9 +84,9 @@ def start_classification_worker(db_path: Path, config: dict):
             print("[Worker] Classification worker disabled")
             return
 
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            print("[Worker] No ANTHROPIC_API_KEY, classification worker disabled")
-            return
+        has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        if not has_api_key:
+            print("[Worker] No ANTHROPIC_API_KEY, LLM classification disabled (prefilters still work)")
 
         def worker_loop():
             print("[Worker] Classification worker started")
@@ -105,44 +105,50 @@ def start_classification_worker(db_path: Path, config: dict):
                         time.sleep(0.1)
                         continue
 
-                    # Group jobs by prompt_id (most modes use the same prompt)
-                    by_prompt: dict[str, list] = {}
-                    for job in jobs:
-                        if job.prompt_id not in by_prompt:
-                            by_prompt[job.prompt_id] = []
-                        by_prompt[job.prompt_id].append(job)
+                    # Collect all tweet IDs and mode IDs from jobs
+                    all_tweet_ids = [j.tweet_id for j in jobs]
+                    mode_ids = list(set(j.mode_id for j in jobs))
 
-                    all_tweet_ids = []
+                    # If we have an API key, do LLM classification
+                    if has_api_key:
+                        # Group jobs by prompt_id
+                        by_prompt: dict[str, list] = {}
+                        for job in jobs:
+                            if job.prompt_id not in by_prompt:
+                                by_prompt[job.prompt_id] = []
+                            by_prompt[job.prompt_id].append(job)
 
-                    for prompt_id, prompt_jobs in by_prompt.items():
-                        tweet_ids = [j.tweet_id for j in prompt_jobs]
-                        all_tweet_ids.extend(tweet_ids)
+                        for prompt_id, prompt_jobs in by_prompt.items():
+                            tweet_ids = [j.tweet_id for j in prompt_jobs]
 
-                        # Get tweet data
-                        tweets = get_tweets_batch(tweet_ids, db_path)
-                        tweets_list = [tweets[tid] for tid in tweet_ids if tid in tweets]
+                            # Get tweet data
+                            tweets = get_tweets_batch(tweet_ids, db_path)
+                            tweets_list = [tweets[tid] for tid in tweet_ids if tid in tweets]
 
-                        if not tweets_list:
-                            continue
+                            if not tweets_list:
+                                continue
 
-                        # Classify the batch
-                        print(f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}")
-                        results = classify_and_store_batch(
-                            tweets_list,
-                            prompt_id,
-                            model=config["model"],
-                            db_path=db_path,
-                        )
+                            # Classify the batch
+                            print(f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}")
+                            results = classify_and_store_batch(
+                                tweets_list,
+                                prompt_id,
+                                model=config["model"],
+                                db_path=db_path,
+                            )
 
-                        # Log results
-                        success = sum(1 for r in results.values() if "_error" not in r)
-                        errors = len(results) - success
-                        if errors > 0:
-                            print(f"[Worker] Classified: {success} success, {errors} errors")
+                            # Log results
+                            success = sum(1 for r in results.values() if "_error" not in r)
+                            errors = len(results) - success
+                            if errors > 0:
+                                print(f"[Worker] Classified: {success} success, {errors} errors")
 
-                    # Update mode decisions for all classified tweets
+                    # Update mode decisions for classified tweets (only for requested modes)
+                    # This also handles prefilter-only modes even without API key
                     if all_tweet_ids:
-                        compute_mode_decisions_for_tweets(all_tweet_ids, db_path=db_path)
+                        compute_mode_decisions_for_tweets(
+                            all_tweet_ids, mode_ids=mode_ids, db_path=db_path
+                        )
 
                     # Mark jobs as complete
                     queue.mark_complete([j.tweet_id for j in jobs])
@@ -230,12 +236,9 @@ def create_app(config=None):
         if retweets:
             rt_result = store_retweets(retweets, db_path)
 
-        # Queue newly inserted tweets for classification (NORMAL priority)
-        if result["inserted"] > 0:
-            queue = get_classification_queue()
-            prompt_id = current_app.config["CLASSIFICATION_CONFIG"]["default_prompt_id"]
-            tweet_ids = [t["id"] for t in tweets if "id" in t]
-            queue.enqueue_batch(tweet_ids, prompt_id, Priority.NORMAL)
+        # Note: We don't queue tweets here. Classification happens on-demand
+        # when the extension calls /tweets/check with a specific mode.
+        # This avoids expensive LLM calls for modes that aren't being used.
 
         return jsonify(
             {
@@ -271,7 +274,8 @@ def create_app(config=None):
         Expects JSON body: {"ids": ["123", "456", ...], "mode": "mode_id"}
         Returns: {"123": "approved", "456": "pending", ...}
 
-        Pending tweets are automatically queued for classification with HIGH priority.
+        Prefilter decisions are computed synchronously (instant for prefilter-only modes).
+        Tweets needing LLM classification are queued with HIGH priority.
         """
         if request.method == "OPTIONS":
             return "", 204
@@ -288,22 +292,43 @@ def create_app(config=None):
         db_path = get_db_path()
 
         try:
+            # First pass: get current statuses (applies prefilters but doesn't persist)
             statuses = decide_tweets_batch(ids, mode_id, db_path=db_path)
         except KeyError as e:
             return jsonify({"error": str(e)}), 400
 
-        # Queue pending/unknown tweets for classification with HIGH priority
-        # (these are actively visible on the user's screen)
-        pending_ids = [tid for tid, status in statuses.items() if status in ("pending", "unknown")]
+        # Find tweets that need decisions computed
+        pending_ids = [
+            tid for tid, status in statuses.items()
+            if status in ("pending", "unknown")
+        ]
+
         if pending_ids:
-            queue = get_classification_queue()
-            mode = get_mode(mode_id, db_path)
-            prompt_id = (
-                mode["prompt_id"]
-                if mode
-                else current_app.config["CLASSIFICATION_CONFIG"]["default_prompt_id"]
+            # Compute and persist prefilter decisions for this mode
+            # This is fast (no LLM) and handles prefilter-only modes instantly
+            computed = compute_mode_decisions_for_tweets(
+                pending_ids, mode_ids=[mode_id], db_path=db_path
             )
-            queue.enqueue_batch(pending_ids, prompt_id, Priority.HIGH)
+
+            # Update statuses with newly computed decisions
+            for tid in pending_ids:
+                if tid in computed and mode_id in computed[tid]:
+                    statuses[tid] = computed[tid][mode_id]
+
+            # Queue remaining pending tweets for LLM classification
+            still_pending = [
+                tid for tid in pending_ids
+                if statuses.get(tid) == "pending"
+            ]
+            if still_pending:
+                mode = get_mode(mode_id, db_path)
+                prompt_id = (
+                    mode["prompt_id"]
+                    if mode
+                    else current_app.config["CLASSIFICATION_CONFIG"]["default_prompt_id"]
+                )
+                queue = get_classification_queue()
+                queue.enqueue_batch(still_pending, prompt_id, mode_id, Priority.HIGH)
 
         return jsonify(statuses)
 
