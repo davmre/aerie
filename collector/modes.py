@@ -81,7 +81,9 @@ def decide_tweet(
                 return result
 
     # 2. Need LLM response - check if we have one cached
-    response_record = get_prompt_response(tweet["id"], mode["prompt_id"], model, db_path)
+    # Use mode's configured model, falling back to passed model parameter
+    effective_model = mode.get("model_name") or model
+    response_record = get_prompt_response(tweet["id"], mode["prompt_id"], effective_model, db_path)
 
     if not response_record:
         raise NeedsClassification(tweet["id"], mode["prompt_id"])
@@ -135,8 +137,9 @@ def decide_tweets_batch(
     # Get extractor function
     extractor_fn = get_extractor_with_config(mode["extractor"], extractor_config)
 
-    # Get all cached responses
-    responses = get_prompt_responses_batch(tweet_ids, mode["prompt_id"], model, db_path)
+    # Get all cached responses - use mode's configured model
+    effective_model = mode.get("model_name") or model
+    responses = get_prompt_responses_batch(tweet_ids, mode["prompt_id"], effective_model, db_path)
 
     results = {}
 
@@ -283,6 +286,8 @@ def compute_mode_decisions(
 
     # For partial prefilters or extractor-only modes:
     # Only process tweets that have prompt_responses (efficient!)
+    # Use mode's configured model, falling back to passed model parameter
+    effective_model = mode.get("model_name") or model
     with transaction(db_path) as conn:
         # Get tweets with responses that don't have cached decisions yet
         query = """
@@ -292,9 +297,9 @@ def compute_mode_decisions(
             LEFT JOIN mode_decisions md ON t.id = md.tweet_id AND md.mode_id = ?
             WHERE pr.prompt_id = ? AND md.tweet_id IS NULL
         """
-        if model:
+        if effective_model:
             query += " AND pr.model = ?"
-            rows = conn.execute(query, (mode_id, mode["prompt_id"], model)).fetchall()
+            rows = conn.execute(query, (mode_id, mode["prompt_id"], effective_model)).fetchall()
         else:
             rows = conn.execute(query, (mode_id, mode["prompt_id"])).fetchall()
 
@@ -403,7 +408,8 @@ def compute_mode_decisions_for_tweets(
 
     Args:
         tweet_ids: List of tweet IDs to compute decisions for.
-        model: Optional model filter for prompt responses.
+        model: Optional model filter for prompt responses (deprecated, each mode
+            now uses its own model_name setting).
         mode_ids: Optional list of mode IDs to compute for. If None, computes
             for all modes.
         db_path: Database path.
@@ -433,14 +439,16 @@ def compute_mode_decisions_for_tweets(
     if not tweets:
         return {}
 
-    # Collect all unique prompt_ids we need responses for
-    prompt_ids = set(m["prompt_id"] for m in modes)
+    # Collect all unique (prompt_id, model_name) pairs we need responses for
+    # Each mode may have a different model_name
+    prompt_model_pairs = set((m["prompt_id"], m.get("model_name") or model) for m in modes)
 
-    # Get prompt responses for all tweets and prompts
-    responses_by_prompt = {}
-    for prompt_id in prompt_ids:
-        responses_by_prompt[prompt_id] = get_prompt_responses_batch(
-            tweet_ids, prompt_id, model, db_path
+    # Get prompt responses for all tweets and (prompt, model) combinations
+    # Cache keyed by (prompt_id, model_name)
+    responses_cache: dict[tuple[str, str | None], dict] = {}
+    for prompt_id, mode_model in prompt_model_pairs:
+        responses_cache[(prompt_id, mode_model)] = get_prompt_responses_batch(
+            tweet_ids, prompt_id, mode_model, db_path
         )
 
     # Track results and decisions to store
@@ -450,6 +458,7 @@ def compute_mode_decisions_for_tweets(
     for mode in modes:
         mode_id = mode["id"]
         prompt_id = mode["prompt_id"]
+        mode_model = mode.get("model_name") or model
 
         # Parse configs
         prefilter_config = _parse_config(mode.get("prefilter_config"))
@@ -462,7 +471,7 @@ def compute_mode_decisions_for_tweets(
         )
         extractor_fn = get_extractor_with_config(mode["extractor"], extractor_config)
 
-        responses = responses_by_prompt.get(prompt_id, {})
+        responses = responses_cache.get((prompt_id, mode_model), {})
 
         for tweet_id in tweet_ids:
             if tweet_id not in tweets:

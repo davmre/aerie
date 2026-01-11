@@ -130,15 +130,24 @@ def start_classification_worker(db_path: Path, config: dict):
 
                     # If we have an API key, do LLM classification
                     if has_api_key:
-                        # Group jobs by prompt_id
-                        by_prompt: dict[str, list] = {}
+                        # Group jobs by mode_id to respect each mode's provider/model settings
+                        by_mode: dict[str, list] = {}
                         for job in jobs:
-                            if job.prompt_id not in by_prompt:
-                                by_prompt[job.prompt_id] = []
-                            by_prompt[job.prompt_id].append(job)
+                            if job.mode_id not in by_mode:
+                                by_mode[job.mode_id] = []
+                            by_mode[job.mode_id].append(job)
 
-                        for prompt_id, prompt_jobs in by_prompt.items():
-                            tweet_ids = [j.tweet_id for j in prompt_jobs]
+                        for mode_id, mode_jobs in by_mode.items():
+                            # Get mode settings for provider/model
+                            mode = get_mode(mode_id, db_path)
+                            if not mode:
+                                continue
+
+                            prompt_id = mode["prompt_id"]
+                            mode_provider = mode.get("provider") or config.get("provider")
+                            mode_model = mode.get("model_name") or config.get("model")
+
+                            tweet_ids = [j.tweet_id for j in mode_jobs]
 
                             # Get tweet data
                             tweets = get_tweets_batch(tweet_ids, db_path)
@@ -148,14 +157,15 @@ def start_classification_worker(db_path: Path, config: dict):
                                 continue
 
                             # Classify the batch
+                            model_info = f" ({mode_model})" if mode_model else ""
                             print(
-                                f"[Worker] Classifying {len(tweets_list)} tweets with {prompt_id}"
+                                f"[Worker] Classifying {len(tweets_list)} tweets for {mode_id}{model_info}"
                             )
                             results = classify_and_store_batch(
                                 tweets_list,
                                 prompt_id,
-                                provider_name=config.get("provider"),
-                                model=config.get("model"),
+                                provider_name=mode_provider,
+                                model=mode_model,
                                 db_path=db_path,
                             )
 

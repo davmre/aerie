@@ -189,11 +189,11 @@ class AnthropicProvider(LLMProvider):
     config = ProviderConfig(
         name="anthropic",
         description="Anthropic Claude models (Haiku, Sonnet, Opus)",
-        default_model="claude-sonnet-4-20250514",
+        default_model="claude-sonnet-4-5",
         available_models=[
-            "claude-haiku-3-5-20241022",
-            "claude-sonnet-4-20250514",
-            "claude-opus-4-20250514",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
         ],
         api_key_env_var="ANTHROPIC_API_KEY",
     )
@@ -291,11 +291,11 @@ class GeminiProvider(LLMProvider):
     config = ProviderConfig(
         name="gemini",
         description="Google Gemini models (Flash, Pro)",
-        default_model="gemini-2.0-flash",
+        default_model="gemini-3-flash-preview",
         available_models=[
-            "gemini-2.0-flash",
-            "gemini-2.0-flash-lite",
-            "gemini-1.5-pro",
+            "gemini-3-flash-preview",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
         ],
         api_key_env_var="GEMINI_API_KEY",
     )
