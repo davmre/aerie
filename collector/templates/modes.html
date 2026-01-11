@@ -57,6 +57,22 @@
 
             <div id="prefilter-config-container" class="config-container" style="display: none;"></div>
 
+            <div class="form-row">
+                <div class="form-group form-half">
+                    <label for="mode-provider">LLM Provider</label>
+                    <select id="mode-provider" name="provider" onchange="updateModelOptions()">
+                    </select>
+                </div>
+
+                <div class="form-group form-half">
+                    <label for="mode-model">Model (optional)</label>
+                    <select id="mode-model" name="model_name">
+                        <option value="">Provider default</option>
+                    </select>
+                    <small>Leave empty to use provider's default model</small>
+                </div>
+            </div>
+
             <div class="form-group">
                 <label for="mode-description">Description</label>
                 <textarea id="mode-description" name="description" rows="2" placeholder="Optional description"></textarea>
@@ -90,23 +106,26 @@ let modes = [];
 let extractors = [];
 let prefilters = [];
 let prompts = [];
+let providers = [];
 let modeStats = {};  // mode_id -> stats object
 let editingModeId = null;
 
 // Load initial data
 async function loadData() {
     try {
-        const [modesRes, extractorsRes, prefiltersRes, promptsRes] = await Promise.all([
+        const [modesRes, extractorsRes, prefiltersRes, promptsRes, providersRes] = await Promise.all([
             fetch('/api/modes').then(r => r.json()),
             fetch('/api/extractors').then(r => r.json()),
             fetch('/api/prefilters').then(r => r.json()),
-            fetch('/api/prompts').then(r => r.json())
+            fetch('/api/prompts').then(r => r.json()),
+            fetch('/api/providers').then(r => r.json())
         ]);
 
         modes = modesRes.modes;
         extractors = extractorsRes.extractors;
         prefilters = prefiltersRes.prefilters;
         prompts = promptsRes.prompts;
+        providers = providersRes.providers;
 
         populateDropdowns();
         renderModes();
@@ -154,6 +173,32 @@ function populateDropdowns() {
     const prefilterSelect = document.getElementById('mode-prefilter');
     prefilterSelect.innerHTML = '<option value="">None</option>' +
         prefilters.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
+
+    // Providers
+    const providerSelect = document.getElementById('mode-provider');
+    providerSelect.innerHTML = providers.map(p => {
+        const status = p.api_key_set ? '' : ' (no API key)';
+        return `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${status}</option>`;
+    }).join('');
+
+    // Initialize model options for default provider
+    updateModelOptions();
+}
+
+function updateModelOptions() {
+    const providerName = document.getElementById('mode-provider').value;
+    const provider = providers.find(p => p.name === providerName);
+    const modelSelect = document.getElementById('mode-model');
+
+    if (!provider) {
+        modelSelect.innerHTML = '<option value="">Provider default</option>';
+        return;
+    }
+
+    modelSelect.innerHTML = '<option value="">Provider default (' + escapeHtml(provider.default_model) + ')</option>' +
+        provider.available_models.map(m =>
+            `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`
+        ).join('');
 }
 
 function renderModes() {
@@ -187,6 +232,7 @@ function renderModes() {
                     ${mode.extractor_config ? `<code>${escapeHtml(JSON.stringify(mode.extractor_config))}</code>` : ''}</div>
                 ${mode.prefilter ? `<div><strong>Prefilter:</strong> ${escapeHtml(mode.prefilter)}
                     ${mode.prefilter_config ? `<code>${escapeHtml(JSON.stringify(mode.prefilter_config))}</code>` : ''}</div>` : ''}
+                <div><strong>Provider:</strong> ${escapeHtml(mode.provider || 'anthropic')}${mode.model_name ? ` <code>${escapeHtml(mode.model_name)}</code>` : ''}</div>
                 ${mode.description ? `<div class="mode-description">${escapeHtml(mode.description)}</div>` : ''}
                 ${mode.human_label_count > 0 ?
                     `<div class="mode-labels">${mode.human_label_count} human labels</div>` : ''}
@@ -323,10 +369,15 @@ async function editMode(modeId) {
     document.getElementById('mode-prompt').value = mode.prompt_id;
     document.getElementById('mode-extractor').value = mode.extractor;
     document.getElementById('mode-prefilter').value = mode.prefilter || '';
+    document.getElementById('mode-provider').value = mode.provider || 'anthropic';
     document.getElementById('mode-description').value = mode.description || '';
 
     updateExtractorConfig();
     updatePrefilterConfig();
+    updateModelOptions();
+
+    // Set model after updating options
+    document.getElementById('mode-model').value = mode.model_name || '';
 
     // Fill in config values
     if (mode.extractor_config) {
@@ -373,6 +424,8 @@ document.getElementById('mode-form').addEventListener('submit', async (e) => {
         extractor_config: extractorConfig,
         prefilter: prefilterName || null,
         prefilter_config: prefilterConfig,
+        provider: document.getElementById('mode-provider').value || 'anthropic',
+        model_name: document.getElementById('mode-model').value || null,
         description: document.getElementById('mode-description').value || null
     };
 
@@ -710,6 +763,15 @@ loadData();
 
 .config-field:last-child {
     margin-bottom: 0;
+}
+
+.form-row {
+    display: flex;
+    gap: 16px;
+}
+
+.form-half {
+    flex: 1;
 }
 
 .form-actions {

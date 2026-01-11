@@ -2,8 +2,6 @@
 
 from unittest.mock import Mock, patch
 
-from anthropic.types import TextBlock
-
 from batch_classifier import (
     build_batch_prompt,
     classify_tweets_batch,
@@ -209,104 +207,67 @@ class TestClassifyTweetsBatch:
 
         assert result["123"]["_error"] == "prompt_not_found"
 
-    @patch("batch_classifier.anthropic.Anthropic")
+    @patch("batch_classifier.get_provider")
     @patch("batch_classifier.get_prompt")
-    def test_classify_success(self, mock_get_prompt, mock_anthropic_class):
+    def test_classify_success(self, mock_get_prompt, mock_get_provider):
         """Successful classification returns parsed results."""
         mock_get_prompt.return_value = {
             "id": "test_prompt",
             "prompt_text": "Classify tweets",
         }
 
-        # Mock the API response
-        mock_client = Mock()
-        mock_anthropic_class.return_value = mock_client
-        mock_response = Mock()
-        mock_response.content = [
-            TextBlock(type="text", text='[{"id": "123", "approved": true, "reason": "Good"}]')
-        ]
-        mock_client.messages.create.return_value = mock_response
+        # Mock the provider
+        mock_provider = Mock()
+        mock_provider.get_api_key.return_value = "test-api-key"
+        mock_provider.classify_batch.return_value = {
+            "123": {"approved": True, "reason": "Good"}
+        }
+        mock_get_provider.return_value = mock_provider
 
         tweets = [{"id": "123", "text": "Test tweet", "author_username": "user"}]
-        result = classify_tweets_batch(tweets, "test_prompt", client=mock_client)
+        result = classify_tweets_batch(tweets, "test_prompt")
 
         assert result["123"]["approved"] is True
         assert result["123"]["reason"] == "Good"
 
-    @patch("batch_classifier.anthropic.Anthropic")
+    @patch("batch_classifier.get_provider")
     @patch("batch_classifier.get_prompt")
-    def test_classify_rate_limit_error(self, mock_get_prompt, mock_anthropic_class):
-        """Rate limit errors are captured in results."""
-        import anthropic
-
-        mock_get_prompt.return_value = {
-            "id": "test_prompt",
-            "prompt_text": "Classify tweets",
-        }
-
-        mock_client = Mock()
-        mock_anthropic_class.return_value = mock_client
-
-        # Create a proper RateLimitError
-        mock_response = Mock()
-        mock_response.status_code = 429
-        mock_response.headers = {}
-        error = anthropic.RateLimitError(
-            message="Rate limit exceeded",
-            response=mock_response,
-            body={"error": {"message": "Rate limit exceeded"}},
-        )
-        mock_client.messages.create.side_effect = error
-
-        tweets = [{"id": "123", "text": "Test"}]
-        result = classify_tweets_batch(tweets, "test_prompt", client=mock_client)
-
-        assert result["123"]["_error"] == "rate_limit"
-
-    @patch("batch_classifier.anthropic.Anthropic")
-    @patch("batch_classifier.get_prompt")
-    def test_classify_api_error(self, mock_get_prompt, mock_anthropic_class):
+    def test_classify_api_error(self, mock_get_prompt, mock_get_provider):
         """API errors are captured in results."""
-        import anthropic
-
         mock_get_prompt.return_value = {
             "id": "test_prompt",
             "prompt_text": "Classify tweets",
         }
 
-        mock_client = Mock()
-        mock_anthropic_class.return_value = mock_client
-
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.headers = {}
-        error = anthropic.APIError(
-            message="Server error",
-            request=Mock(),
-            body={"error": {"message": "Server error"}},
-        )
-        mock_client.messages.create.side_effect = error
+        # Mock the provider to return an error result
+        mock_provider = Mock()
+        mock_provider.get_api_key.return_value = "test-api-key"
+        mock_provider.classify_batch.return_value = {
+            "123": {"_error": "api_error", "_message": "Server error"}
+        }
+        mock_get_provider.return_value = mock_provider
 
         tweets = [{"id": "123", "text": "Test"}]
-        result = classify_tweets_batch(tweets, "test_prompt", client=mock_client)
+        result = classify_tweets_batch(tweets, "test_prompt")
 
         assert result["123"]["_error"] == "api_error"
 
-    def test_classify_no_api_key_returns_error(self):
+    @patch("batch_classifier.get_provider")
+    @patch("batch_classifier.get_prompt")
+    def test_classify_no_api_key_returns_error(self, mock_get_prompt, mock_get_provider):
         """Missing API key returns error for all tweets."""
-        with patch.dict("os.environ", {}, clear=True):
-            # Remove ANTHROPIC_API_KEY if present
-            import os
+        mock_get_prompt.return_value = {
+            "id": "test_prompt",
+            "prompt_text": "Classify tweets",
+        }
 
-            os.environ.pop("ANTHROPIC_API_KEY", None)
+        # Mock the provider with no API key
+        mock_provider = Mock()
+        mock_provider.get_api_key.return_value = None
+        mock_provider.config.api_key_env_var = "ANTHROPIC_API_KEY"
+        mock_get_provider.return_value = mock_provider
 
-            with patch("batch_classifier.get_prompt") as mock_get_prompt:
-                mock_get_prompt.return_value = {
-                    "id": "test_prompt",
-                    "prompt_text": "Classify tweets",
-                }
+        tweets = [{"id": "123", "text": "Test"}]
+        result = classify_tweets_batch(tweets, "test_prompt")
 
-                tweets = [{"id": "123", "text": "Test"}]
-                result = classify_tweets_batch(tweets, "test_prompt")
-
-                assert result["123"]["_error"] == "no_api_key"
+        assert result["123"]["_error"] == "no_api_key"
