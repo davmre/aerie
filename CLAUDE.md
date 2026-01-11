@@ -56,10 +56,18 @@ Twitter's timeline data comes from `/graphql/.../HomeTimeline`, `/graphql/.../Ho
 The collector service includes web interfaces:
 
 - `/ui/label` - Labeling interface for creating ground truth data
-- `/ui/read` - Clean reading view for approved tweets
+- `/ui/read` - Clean reading view for approved tweets (conversation chain view)
 - `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
 
 Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics.
+
+### Read Page: Conversation Chains
+
+The Read page displays tweets as "conversation chains" rather than individual tweets:
+- **Chain selection**: At each reply, follows the longest unambiguous path
+- **Branch handling**: When multiple replies have equal depth, stops and shows count of hidden replies
+- **Modal navigation**: Hidden replies accessible via popup modal with drill-down navigation
+- **Scalable pagination**: Fetches conversation roots with SQL pagination, computes chains on-demand
 
 ## Design Principle: Context Symmetry
 
@@ -160,6 +168,8 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/modes` | GET | List available filtering modes |
 | `/stats` | GET | Database statistics (accepts `?mode=` for mode-specific stats) |
 | `/api/ui/tweets` | GET | Get tweets for web UI with full context |
+| `/api/ui/chains` | GET | Get conversation chains for Read page (paginated) |
+| `/api/ui/tweet/<id>/replies` | GET | Get tweet and its direct replies for modal view |
 | `/api/ui/label` | POST | Add human label for a tweet |
 | `/api/modes` | GET/POST | List modes or create new mode |
 | `/api/modes/<id>` | GET/PUT/DELETE | Get, update, or delete a mode |
