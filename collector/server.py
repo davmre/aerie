@@ -20,6 +20,7 @@ from classifier import setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
+    compute_conversation_chains,
     create_mode,
     delete_mode,
     get_mode,
@@ -27,9 +28,11 @@ from database import (
     get_mode_label_counts,
     get_prompt,
     get_prompt_responses_batch,
+    get_replies_for_tweet,
     get_retweets_batch,
     get_stats,
     get_thread_context_batch,
+    get_tweet,
     get_tweets_batch,
     invalidate_mode_decisions,
     list_modes,
@@ -830,6 +833,147 @@ def create_app(config=None):
         add_human_label(tweet_id, mode_id, should_show, data.get("notes"), db_path)
 
         return jsonify({"status": "ok"})
+
+    @app.route("/api/ui/tweet/<tweet_id>/replies", methods=["GET"])
+    def api_ui_tweet_replies(tweet_id: str):
+        """
+        Get a tweet and its approved direct replies for the modal view.
+
+        Query params:
+        - mode: Mode ID for filtering approved tweets (default: "default")
+        """
+        db_path = get_db_path()
+        mode_id = request.args.get("mode", "default")
+
+        result = get_replies_for_tweet(tweet_id, mode_id, db_path)
+
+        # Enrich replies with quoted tweets if present
+        if result["replies"]:
+            quoted_ids = [
+                r["tweet"]["quoted_tweet_id"]
+                for r in result["replies"]
+                if r["tweet"].get("quoted_tweet_id")
+            ]
+            if quoted_ids:
+                quoted_tweets = get_tweets_batch(quoted_ids, db_path)
+                for r in result["replies"]:
+                    qid = r["tweet"].get("quoted_tweet_id")
+                    if qid:
+                        r["tweet"]["quoted_tweet"] = quoted_tweets.get(qid)
+
+        # Also enrich the parent tweet with its quoted tweet
+        if result["tweet"] and result["tweet"].get("quoted_tweet_id"):
+            quoted = get_tweet(result["tweet"]["quoted_tweet_id"], db_path)
+            if quoted:
+                result["tweet"]["quoted_tweet"] = quoted
+
+        return jsonify(result)
+
+    @app.route("/api/ui/chains", methods=["GET"])
+    def api_ui_chains():
+        """
+        Get approved tweets as conversation chains for the Read page.
+
+        Query params:
+        - mode: Mode ID for filtering (default: "default")
+        - sort: Sort field for chains (created_at or captured_at)
+        - limit: Number of chains to return
+        - offset: Pagination offset
+
+        Returns chains with hidden_replies counts for expandable UI.
+        """
+        db_path = get_db_path()
+        mode_id = request.args.get("mode", "default")
+        sort_field = request.args.get("sort", "captured_at")
+        limit = request.args.get("limit", 20, type=int)
+        offset = request.args.get("offset", 0, type=int)
+
+        # Get all approved tweet IDs for this mode
+        with transaction(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT t.id FROM tweets t
+                JOIN mode_decisions md ON t.id = md.tweet_id
+                WHERE md.mode_id = ? AND md.decision = 'approved'
+                """,
+                (mode_id,),
+            ).fetchall()
+            approved_ids = [row["id"] for row in rows]
+
+        if not approved_ids:
+            return jsonify({"chains": [], "total": 0})
+
+        # Compute all chains
+        all_chains = compute_conversation_chains(approved_ids, mode_id, db_path)
+
+        # Sort chains based on sort_field
+        # For created_at, use the first tweet's created_at
+        # For captured_at, use the first tweet's captured_at
+        if sort_field == "created_at":
+            all_chains.sort(
+                key=lambda c: c["chain"][0].get("created_at") or "",
+                reverse=True,
+            )
+        else:
+            all_chains.sort(
+                key=lambda c: c["chain"][0].get("captured_at") or "",
+                reverse=True,
+            )
+
+        total = len(all_chains)
+
+        # Apply pagination
+        chains = all_chains[offset : offset + limit]
+
+        # Enrich chains with additional data
+        # Collect all tweet IDs in chains for batch operations
+        all_tweet_ids = []
+        for chain_entry in chains:
+            for tweet in chain_entry["chain"]:
+                all_tweet_ids.append(tweet["id"])
+
+        # Get retweet info
+        retweets_by_tweet = get_retweets_batch(all_tweet_ids, db_path)
+
+        # Get quoted tweets
+        quoted_ids = []
+        for chain_entry in chains:
+            for tweet in chain_entry["chain"]:
+                if tweet.get("quoted_tweet_id"):
+                    quoted_ids.append(tweet["quoted_tweet_id"])
+
+        quoted_tweets = {}
+        if quoted_ids:
+            quoted_tweets = get_tweets_batch(quoted_ids, db_path)
+
+        # Get prompt responses for all tweets
+        all_modes = get_available_modes(db_path)
+        responses_by_tweet: dict[str, list] = {}
+        seen_prompts: set[str] = set()
+        for mode in all_modes:
+            pid = mode.get("prompt_id")
+            if pid and pid not in seen_prompts:
+                seen_prompts.add(pid)
+                responses = get_prompt_responses_batch(all_tweet_ids, pid, db_path=db_path)
+                for tid, resp in responses.items():
+                    if tid not in responses_by_tweet:
+                        responses_by_tweet[tid] = []
+                    responses_by_tweet[tid].append({
+                        "prompt_id": pid,
+                        "model": resp.get("model"),
+                        "response": resp.get("response"),
+                    })
+
+        # Enrich tweets in chains
+        for chain_entry in chains:
+            for tweet in chain_entry["chain"]:
+                tid = tweet["id"]
+                tweet["retweeted_by"] = retweets_by_tweet.get(tid, [])
+                if tweet.get("quoted_tweet_id"):
+                    tweet["quoted_tweet"] = quoted_tweets.get(tweet["quoted_tweet_id"])
+                tweet["responses"] = responses_by_tweet.get(tid, [])
+
+        return jsonify({"chains": chains, "total": total})
 
     return app
 

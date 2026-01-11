@@ -4,16 +4,109 @@
 
 {% block extra_styles %}
 <style>
-    .read-tweet {
+    /* Chain container */
+    .chain {
         max-width: 600px;
-        margin: 0 auto 16px;
+        margin: 0 auto 24px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-primary);
+        border-radius: 12px;
+        overflow: hidden;
     }
 
-    .read-tweet .tweet-text {
+    /* Individual tweet in chain */
+    .chain-tweet {
+        position: relative;
+        padding: 16px;
+        padding-left: 40px;
+    }
+
+    .chain-tweet:not(:last-child) {
+        border-bottom: none;
+    }
+
+    /* Connecting line */
+    .chain-tweet::before {
+        content: '';
+        position: absolute;
+        left: 20px;
+        top: 0;
+        bottom: 0;
+        width: 2px;
+        background: var(--border-thread);
+    }
+
+    /* First tweet: line starts from middle */
+    .chain-tweet:first-child::before {
+        top: 50%;
+    }
+
+    /* Last tweet: line ends at middle */
+    .chain-tweet:last-child::before {
+        bottom: 50%;
+    }
+
+    /* Single tweet: no line */
+    .chain-tweet:only-child::before {
+        display: none;
+    }
+
+    /* Node dot on the line */
+    .chain-tweet::after {
+        content: '';
+        position: absolute;
+        left: 14px;
+        top: 24px;
+        width: 14px;
+        height: 14px;
+        background: var(--bg-secondary);
+        border: 2px solid var(--accent);
+        border-radius: 50%;
+        z-index: 1;
+    }
+
+    .chain-tweet .tweet-text {
         font-size: 1.1rem;
         line-height: 1.6;
     }
 
+    .chain-tweet .tweet-header {
+        margin-bottom: 8px;
+    }
+
+    .chain-tweet .tweet-metrics {
+        margin-top: 8px;
+    }
+
+    /* Hidden replies indicator */
+    .hidden-replies-indicator {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 4px 10px;
+        background: var(--bg-nested);
+        border: 1px solid var(--border-secondary);
+        border-radius: 16px;
+        font-size: 0.85rem;
+        color: var(--accent);
+        cursor: pointer;
+        transition: background 0.2s;
+    }
+
+    .hidden-replies-indicator:hover {
+        background: var(--accent);
+        color: var(--bg-primary);
+    }
+
+    /* Retweeted by header */
+    .chain-retweeted-by {
+        padding: 8px 16px;
+        background: var(--bg-nested);
+        border-bottom: 1px solid var(--border-secondary);
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+
+    /* Reason tooltip */
     .reason-tooltip {
         margin-top: 8px;
         padding: 8px 12px;
@@ -24,7 +117,7 @@
         display: none;
     }
 
-    .read-tweet:hover .reason-tooltip {
+    .chain-tweet:hover .reason-tooltip {
         display: block;
     }
 
@@ -40,6 +133,137 @@
         font-size: 0.9rem;
         padding: 8px 0;
         border-bottom: 1px solid var(--border-secondary);
+    }
+
+    /* Modal styles */
+    .modal-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.2s, visibility 0.2s;
+    }
+
+    .modal-overlay.active {
+        opacity: 1;
+        visibility: visible;
+    }
+
+    .modal-content {
+        background: var(--bg-primary);
+        border-radius: 12px;
+        max-width: 600px;
+        width: 90%;
+        max-height: 80vh;
+        overflow-y: auto;
+        position: relative;
+    }
+
+    .modal-header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border-secondary);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        background: var(--bg-primary);
+        z-index: 1;
+    }
+
+    .modal-header h3 {
+        margin: 0;
+        font-size: 1.1rem;
+    }
+
+    .modal-close {
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        color: var(--text-secondary);
+        padding: 0;
+        line-height: 1;
+    }
+
+    .modal-close:hover {
+        color: var(--text-primary);
+    }
+
+    .modal-body {
+        padding: 16px;
+    }
+
+    /* Parent tweet in modal (shown for context) */
+    .modal-parent-tweet {
+        padding: 12px;
+        background: var(--bg-nested);
+        border-radius: 8px;
+        margin-bottom: 16px;
+        border-left: 3px solid var(--accent);
+    }
+
+    .modal-parent-tweet .tweet-header {
+        margin-bottom: 8px;
+    }
+
+    .modal-parent-tweet .tweet-text {
+        font-size: 0.95rem;
+    }
+
+    /* Reply in modal */
+    .modal-reply {
+        padding: 12px;
+        border: 1px solid var(--border-secondary);
+        border-radius: 8px;
+        margin-bottom: 12px;
+    }
+
+    .modal-reply:last-child {
+        margin-bottom: 0;
+    }
+
+    .modal-reply .tweet-header {
+        margin-bottom: 8px;
+    }
+
+    .modal-reply-count {
+        margin-top: 8px;
+        font-size: 0.85rem;
+        color: var(--accent);
+        cursor: pointer;
+    }
+
+    .modal-reply-count:hover {
+        text-decoration: underline;
+    }
+
+    .modal-back {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--accent);
+        cursor: pointer;
+        font-size: 0.9rem;
+        margin-bottom: 12px;
+    }
+
+    .modal-back:hover {
+        text-decoration: underline;
+    }
+
+    .modal-no-replies {
+        color: var(--text-secondary);
+        text-align: center;
+        padding: 20px;
     }
 </style>
 {% endblock %}
@@ -58,37 +282,49 @@
         <option value="created_at">Tweet date</option>
         <option value="captured_at">Captured date</option>
     </select>
-
-    <label style="margin-left: 12px; cursor: pointer;">
-        <input type="checkbox" id="leaf-only-checkbox" checked style="margin-right: 4px;">
-        Collapse threads
-    </label>
 </div>
 
 <div class="mode-stats" id="mode-stats"></div>
 
-<div id="tweets-container">
+<div id="chains-container">
     <div class="loading">Loading tweets...</div>
 </div>
 
 <div class="load-more" id="load-more" style="display: none;">
     <button class="btn" onclick="loadMore()">Load more</button>
 </div>
+
+<!-- Replies Modal -->
+<div class="modal-overlay" id="replies-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Replies</h3>
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+        </div>
+        <div class="modal-body" id="modal-body">
+            <!-- Dynamic content -->
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-const PAGE_SIZE = 30;
+const PAGE_SIZE = 20;
 let offset = 0;
 let hasMore = true;
 let loading = false;
 
-const container = document.getElementById('tweets-container');
+// Modal navigation history
+let modalHistory = [];
+
+const container = document.getElementById('chains-container');
 const modeSelect = document.getElementById('mode-select');
 const sortSelect = document.getElementById('sort-select');
-const leafOnlyCheckbox = document.getElementById('leaf-only-checkbox');
 const loadMoreDiv = document.getElementById('load-more');
 const statsDiv = document.getElementById('mode-stats');
+const modal = document.getElementById('replies-modal');
+const modalBody = document.getElementById('modal-body');
 
 // Update stats display for current mode
 async function updateStats(mode) {
@@ -100,7 +336,7 @@ async function updateStats(mode) {
     statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
 }
 
-async function loadTweets(append = false) {
+async function loadChains(append = false) {
     if (loading) return;
     loading = true;
 
@@ -112,33 +348,31 @@ async function loadTweets(append = false) {
     try {
         const params = new URLSearchParams({
             mode: modeSelect.value,
-            status: 'approved',
             sort: sortSelect.value,
             limit: PAGE_SIZE,
-            offset: offset,
-            leaf_only: leafOnlyCheckbox.checked
+            offset: offset
         });
 
-        const response = await fetch(`/api/ui/tweets?${params}`);
+        const response = await fetch(`/api/ui/chains?${params}`);
         const data = await response.json();
 
         if (!append) {
             container.innerHTML = '';
         }
 
-        if (data.tweets.length === 0 && !append) {
+        if (data.chains.length === 0 && !append) {
             container.innerHTML = '<div class="loading">No approved tweets in this mode yet</div>';
             loadMoreDiv.style.display = 'none';
             return;
         }
 
-        data.tweets.forEach(tweet => {
-            container.insertAdjacentHTML('beforeend', renderTweet(tweet));
+        data.chains.forEach(chainData => {
+            container.insertAdjacentHTML('beforeend', renderChain(chainData));
         });
 
-        hasMore = data.tweets.length === PAGE_SIZE;
+        hasMore = data.chains.length === PAGE_SIZE;
         loadMoreDiv.style.display = hasMore ? 'block' : 'none';
-        offset += data.tweets.length;
+        offset += data.chains.length;
 
     } catch (err) {
         if (!append) {
@@ -150,26 +384,45 @@ async function loadTweets(append = false) {
 }
 
 function loadMore() {
-    loadTweets(true);
+    loadChains(true);
 }
 
-function renderTweet(tweet) {
+function renderChain(chainData) {
+    const { chain, hidden_replies } = chainData;
+
+    // Check if first tweet was retweeted
+    const firstTweet = chain[0];
+    const retweetedBy = firstTweet.retweeted_by || [];
+
+    let html = '<div class="chain">';
+
+    // Retweet attribution at top of chain
+    if (retweetedBy.length > 0) {
+        html += `
+            <div class="chain-retweeted-by">
+                Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
+            </div>
+        `;
+    }
+
+    // Render each tweet in the chain
+    chain.forEach(tweet => {
+        html += renderChainTweet(tweet, hidden_replies[tweet.id] || 0);
+    });
+
+    html += '</div>';
+    return html;
+}
+
+function renderChainTweet(tweet, hiddenReplyCount) {
     const response = tweet.responses?.[0];
     const reason = response?.response?.reason || '';
     const tweetUrl = tweet.author_username
         ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
         : `https://twitter.com/i/status/${tweet.id}`;
-    const retweetedBy = tweet.retweeted_by || [];
-    const threadAncestors = tweet.thread_ancestors || [];
 
     return `
-        <div class="tweet read-tweet">
-            ${retweetedBy.length > 0 ? `
-                <div class="retweeted-by">
-                    🔁 Retweeted by ${retweetedBy.map(rt => escapeHtml(rt.retweeter_display_name || rt.retweeter_username)).join(', ')}
-                </div>
-            ` : ''}
-            ${threadAncestors.length > 0 ? renderThreadContext(threadAncestors) : ''}
+        <div class="chain-tweet">
             <div class="tweet-header">
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
@@ -190,10 +443,141 @@ function renderTweet(tweet) {
                 <span>${tweet.reply_count || 0} replies</span>
             </div>
 
+            ${hiddenReplyCount > 0 ? `
+                <span class="hidden-replies-indicator" onclick="showReplies('${tweet.id}')">
+                    ${hiddenReplyCount} other ${hiddenReplyCount === 1 ? 'reply' : 'replies'}
+                </span>
+            ` : ''}
+
             ${reason ? `<div class="reason-tooltip">Approved: ${escapeHtml(reason)}</div>` : ''}
         </div>
     `;
 }
+
+// Modal functions
+async function showReplies(tweetId) {
+    modalHistory = [tweetId];
+    await loadRepliesIntoModal(tweetId);
+    modal.classList.add('active');
+}
+
+async function loadRepliesIntoModal(tweetId) {
+    modalBody.innerHTML = '<div class="loading">Loading replies...</div>';
+
+    try {
+        const params = new URLSearchParams({ mode: modeSelect.value });
+        const response = await fetch(`/api/ui/tweet/${tweetId}/replies?${params}`);
+        const data = await response.json();
+
+        if (!data.tweet) {
+            modalBody.innerHTML = '<div class="modal-no-replies">Tweet not found</div>';
+            return;
+        }
+
+        let html = '';
+
+        // Back button if we've navigated deeper
+        if (modalHistory.length > 1) {
+            html += `
+                <div class="modal-back" onclick="goBackInModal()">
+                    ← Back
+                </div>
+            `;
+        }
+
+        // Parent tweet for context
+        const tweet = data.tweet;
+        const tweetUrl = tweet.author_username
+            ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
+            : `https://twitter.com/i/status/${tweet.id}`;
+
+        html += `
+            <div class="modal-parent-tweet">
+                <div class="tweet-header">
+                    <div>
+                        <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
+                        <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                    </div>
+                    <div class="tweet-meta">
+                        <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
+                    </div>
+                </div>
+                <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
+            </div>
+        `;
+
+        // Replies
+        if (data.replies.length === 0) {
+            html += '<div class="modal-no-replies">No approved replies</div>';
+        } else {
+            data.replies.forEach(replyData => {
+                const reply = replyData.tweet;
+                const replyCount = replyData.reply_count;
+                const replyUrl = reply.author_username
+                    ? `https://twitter.com/${reply.author_username}/status/${reply.id}`
+                    : `https://twitter.com/i/status/${reply.id}`;
+
+                html += `
+                    <div class="modal-reply">
+                        <div class="tweet-header">
+                            <div>
+                                <span class="tweet-author">${escapeHtml(reply.author_display_name || reply.author_username || 'Unknown')}</span>
+                                <span class="tweet-username">@${escapeHtml(reply.author_username || 'unknown')}</span>
+                            </div>
+                            <div class="tweet-meta">
+                                <a href="${replyUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(reply.created_at)}</a>
+                            </div>
+                        </div>
+                        <div class="tweet-text">${renderCollapsibleText(reply.text || '', TEXT_LIMIT_TOPLEVEL)}</div>
+                        ${reply.quoted_tweet ? renderQuotedTweet(reply.quoted_tweet) : ''}
+                        ${replyCount > 0 ? `
+                            <div class="modal-reply-count" onclick="navigateToReplies('${reply.id}')">
+                                ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'} →
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            });
+        }
+
+        modalBody.innerHTML = html;
+
+    } catch (err) {
+        modalBody.innerHTML = `<div class="modal-no-replies">Error: ${err.message}</div>`;
+    }
+}
+
+function navigateToReplies(tweetId) {
+    modalHistory.push(tweetId);
+    loadRepliesIntoModal(tweetId);
+}
+
+function goBackInModal() {
+    if (modalHistory.length > 1) {
+        modalHistory.pop();
+        loadRepliesIntoModal(modalHistory[modalHistory.length - 1]);
+    }
+}
+
+function closeModal() {
+    modal.classList.remove('active');
+    modalHistory = [];
+}
+
+// Close modal on overlay click
+modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+        closeModal();
+    }
+});
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal.classList.contains('active')) {
+        closeModal();
+    }
+});
 
 // Infinite scroll
 window.addEventListener('scroll', () => {
@@ -203,12 +587,11 @@ window.addEventListener('scroll', () => {
     }
 });
 
-modeSelect.addEventListener('change', () => { loadTweets(); updateStats(modeSelect.value); });
-sortSelect.addEventListener('change', () => loadTweets());
-leafOnlyCheckbox.addEventListener('change', () => loadTweets());
+modeSelect.addEventListener('change', () => { loadChains(); updateStats(modeSelect.value); });
+sortSelect.addEventListener('change', () => loadChains());
 
 // Initial load
-loadTweets();
+loadChains();
 updateStats(modeSelect.value);
 </script>
 {% endblock %}
