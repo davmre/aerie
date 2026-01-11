@@ -399,6 +399,7 @@ def api_ui_tweets():
     - sort: Sort field (created_at, captured_at)
     - limit: Number of tweets
     - offset: Pagination offset
+    - leaf_only: If "true", only show leaf tweets (no approved replies to them)
     """
     mode_id = request.args.get("mode", "default")
     status_filter = request.args.get("status", "all")
@@ -406,6 +407,7 @@ def api_ui_tweets():
     sort_field = request.args.get("sort", "captured_at")
     limit = request.args.get("limit", 20, type=int)
     offset = request.args.get("offset", 0, type=int)
+    leaf_only = request.args.get("leaf_only", "").lower() == "true"
 
     # Get mode config
     mode_config = get_mode(mode_id)
@@ -450,6 +452,34 @@ def api_ui_tweets():
                 query += " WHERE (t.author_username LIKE ? OR t.text LIKE ?)"
             params.extend([f"%{search}%", f"%{search}%"])
 
+        # Leaf-only filter: exclude tweets that have approved children or are quoted without context
+        # Uses an optimized JOIN-based approach instead of correlated subqueries for performance
+        if leaf_only:
+            # Wrap the existing query and join with pre-computed parent/quoted sets
+            query = f"""
+                WITH base_tweets AS ({query}),
+                replied_parents AS (
+                    SELECT DISTINCT reply_to_tweet_id as parent_id
+                    FROM tweets child
+                    JOIN mode_decisions md_child ON child.id = md_child.tweet_id
+                    WHERE md_child.mode_id = ? AND md_child.decision = 'approved'
+                    AND reply_to_tweet_id IS NOT NULL
+                ),
+                quoted_originals AS (
+                    SELECT DISTINCT quoted_tweet_id as quoted_id
+                    FROM tweets quoter
+                    JOIN mode_decisions md_quoter ON quoter.id = md_quoter.tweet_id
+                    WHERE md_quoter.mode_id = ? AND md_quoter.decision = 'approved'
+                    AND quoted_tweet_id IS NOT NULL
+                )
+                SELECT t.* FROM base_tweets t
+                LEFT JOIN replied_parents rp ON t.id = rp.parent_id
+                LEFT JOIN quoted_originals qo ON t.id = qo.quoted_id
+                WHERE rp.parent_id IS NULL
+                AND (t.reply_to_tweet_id IS NOT NULL OR qo.quoted_id IS NULL)
+            """
+            params.extend([mode_id, mode_id])
+
         # Sort
         if sort_field in ("created_at", "captured_at"):
             query += f" ORDER BY t.{sort_field} DESC"
@@ -457,9 +487,15 @@ def api_ui_tweets():
             query += " ORDER BY t.captured_at DESC"
 
         # Get total count first
-        count_query = query.split(" ORDER BY")[0]
-        count_query = count_query.replace("SELECT t.*", "SELECT COUNT(*)", 1)
-        count_query = count_query.replace("SELECT *", "SELECT COUNT(*)", 1)
+        # For CTE queries (leaf_only), wrap in subquery; otherwise use simple replacement
+        if leaf_only:
+            # For CTE queries, wrap the whole query (minus ORDER BY) in a subquery
+            base_query = query.split(" ORDER BY")[0]
+            count_query = f"SELECT COUNT(*) FROM ({base_query}) AS count_subq"
+        else:
+            count_query = query.split(" ORDER BY")[0]
+            count_query = count_query.replace("SELECT t.*", "SELECT COUNT(*)", 1)
+            count_query = count_query.replace("SELECT *", "SELECT COUNT(*)", 1)
         total = conn.execute(count_query, params).fetchone()[0]
 
         # Add pagination

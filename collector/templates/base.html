@@ -173,6 +173,18 @@
             word-wrap: break-word;
         }
 
+        /* Collapsible text */
+        .text-toggle {
+            color: #6cb6ff;
+            cursor: pointer;
+            font-size: 0.85em;
+            margin-left: 4px;
+        }
+
+        .text-toggle:hover {
+            text-decoration: underline;
+        }
+
         /* Thread context */
         .thread-context {
             margin-bottom: 12px;
@@ -515,6 +527,59 @@
             return result;
         }
 
+        // Counter for generating unique IDs for collapsible text elements
+        let collapsibleIdCounter = 0;
+
+        /**
+         * Render text with optional truncation and expand/collapse toggle.
+         * @param {string} text - The text to render
+         * @param {number} maxLength - Max characters before truncating (0 = no limit)
+         * @param {boolean} processUrls - Whether to process URLs (for main tweet text)
+         * @param {object} urls - URL metadata for expansion (only used if processUrls=true)
+         * @returns {string} HTML string
+         */
+        function renderCollapsibleText(text, maxLength, processUrls = false, urls = null) {
+            if (!text) return '';
+
+            const needsTruncation = maxLength > 0 && text.length > maxLength;
+            const id = `collapsible-${collapsibleIdCounter++}`;
+
+            if (!needsTruncation) {
+                return processUrls ? renderTextWithUrls(text, urls) : escapeHtml(text);
+            }
+
+            // Find a good break point (word boundary) near maxLength
+            let breakPoint = maxLength;
+            const spaceIndex = text.lastIndexOf(' ', maxLength);
+            if (spaceIndex > maxLength * 0.7) {
+                breakPoint = spaceIndex;
+            }
+
+            const truncatedText = text.slice(0, breakPoint);
+            const fullText = text;
+
+            // For truncated text, we escape/process both versions
+            const truncatedHtml = processUrls ? renderTextWithUrls(truncatedText, urls) : escapeHtml(truncatedText);
+            const fullHtml = processUrls ? renderTextWithUrls(fullText, urls) : escapeHtml(fullText);
+
+            return `<span id="${id}-truncated">${truncatedHtml}... <span class="text-toggle" onclick="toggleText('${id}', event)">show more</span></span><span id="${id}-full" style="display: none;">${fullHtml} <span class="text-toggle" onclick="toggleText('${id}', event)">show less</span></span>`;
+        }
+
+        function toggleText(id, event) {
+            event.stopPropagation();
+            const truncated = document.getElementById(id + '-truncated');
+            const full = document.getElementById(id + '-full');
+            if (truncated && full) {
+                const isExpanded = truncated.style.display === 'none';
+                truncated.style.display = isExpanded ? 'inline' : 'none';
+                full.style.display = isExpanded ? 'none' : 'inline';
+            }
+        }
+
+        // Length limits for collapsible text
+        const TEXT_LIMIT_CONTEXT = 280;  // Thread ancestors, quote tweets
+        const TEXT_LIMIT_TOPLEVEL = 560; // Main tweet text
+
         function renderQuotedTweet(qt) {
             if (!qt) return '';
             const qtUrl = qt.author_username
@@ -527,7 +592,7 @@
                         <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
                         <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                     </div>
-                    <div class="quoted-tweet-text">${escapeHtml(qt.text || '')}</div>
+                    <div class="quoted-tweet-text">${renderCollapsibleText(qt.text || '', TEXT_LIMIT_CONTEXT)}</div>
                 </div>
             `;
         }
@@ -548,7 +613,8 @@
                                     <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
                                     <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                                 </div>
-                                <div class="thread-ancestor-text">${escapeHtml(a.text || '')}</div>
+                                <div class="thread-ancestor-text">${renderCollapsibleText(a.text || '', TEXT_LIMIT_CONTEXT)}</div>
+                                ${a.quoted_tweet ? renderQuotedTweet(a.quoted_tweet) : ''}
                             </div>
                         `;
                     }).join('')}

@@ -58,6 +58,11 @@
         <option value="created_at">Tweet date</option>
         <option value="captured_at">Captured date</option>
     </select>
+
+    <label style="margin-left: 12px; cursor: pointer;">
+        <input type="checkbox" id="leaf-only-checkbox" checked style="margin-right: 4px;">
+        Collapse threads
+    </label>
 </div>
 
 <div class="mode-stats" id="mode-stats"></div>
@@ -81,6 +86,7 @@ let loading = false;
 const container = document.getElementById('tweets-container');
 const modeSelect = document.getElementById('mode-select');
 const sortSelect = document.getElementById('sort-select');
+const leafOnlyCheckbox = document.getElementById('leaf-only-checkbox');
 const loadMoreDiv = document.getElementById('load-more');
 const statsDiv = document.getElementById('mode-stats');
 
@@ -109,7 +115,8 @@ async function loadTweets(append = false) {
             status: 'approved',
             sort: sortSelect.value,
             limit: PAGE_SIZE,
-            offset: offset
+            offset: offset,
+            leaf_only: leafOnlyCheckbox.checked
         });
 
         const response = await fetch(`/api/ui/tweets?${params}`);
@@ -173,7 +180,7 @@ function renderTweet(tweet) {
                 </div>
             </div>
 
-            <div class="tweet-text">${renderTextWithUrls(tweet.text || '', tweet.urls)}</div>
+            <div class="tweet-text">${renderCollapsibleText(tweet.text || '', TEXT_LIMIT_TOPLEVEL, true, tweet.urls)}</div>
 
             ${tweet.quoted_tweet ? renderQuotedTweet(tweet.quoted_tweet) : ''}
 
@@ -198,6 +205,7 @@ window.addEventListener('scroll', () => {
 
 modeSelect.addEventListener('change', () => { loadTweets(); updateStats(modeSelect.value); });
 sortSelect.addEventListener('change', () => loadTweets());
+leafOnlyCheckbox.addEventListener('change', () => loadTweets());
 
 // Initial load
 loadTweets();

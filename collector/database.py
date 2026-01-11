@@ -113,6 +113,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_tweets_created_at ON tweets(created_at);
             CREATE INDEX IF NOT EXISTS idx_tweets_author ON tweets(author_username);
             CREATE INDEX IF NOT EXISTS idx_tweets_reply_to ON tweets(reply_to_tweet_id);
+            CREATE INDEX IF NOT EXISTS idx_tweets_quoted_tweet_id ON tweets(quoted_tweet_id);
 
             -- Track capture sessions for debugging/analytics
             CREATE TABLE IF NOT EXISTS capture_sessions (
