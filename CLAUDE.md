@@ -231,6 +231,70 @@ source .venv/bin/activate
 4. Check stats: `curl http://localhost:8080/stats`
 5. Run classifier: `cd collector && python classifier.py`
 
+## Testing
+
+The collector uses pytest for integration testing. Tests use isolated SQLite databases (via `tmp_path` fixtures) so they don't affect production data.
+
+```bash
+# Run all tests
+cd collector
+pytest tests/ -v
+
+# Run specific test file
+pytest tests/test_read_view.py -v
+
+# Run specific test class
+pytest tests/test_read_view.py::TestLeafOnlyFiltering -v
+```
+
+### Test Structure
+
+```
+collector/tests/
+├── __init__.py
+├── conftest.py      # Pytest fixtures (test_db, app, client)
+├── fixtures.py      # Helper functions for creating test data
+└── test_read_view.py # Integration tests for the Read view API
+```
+
+### Key Fixtures
+
+- `test_db` - Fresh SQLite database for each test (with prompts/modes initialized)
+- `app` - Flask app configured with test database and classification disabled
+- `client` - Flask test client for making API requests
+
+### Helper Functions (fixtures.py)
+
+```python
+# Create a tweet
+tweet = make_tweet(id="123", text="Hello", author_username="user1")
+
+# Create a thread (A <- B <- C)
+tweets = make_thread(base_id=100, length=3, author="user1")
+
+# Store tweets and mark as approved
+create_and_store_tweets(tweets, test_db)
+approve_tweets(["100", "101", "102"], test_db)
+```
+
+### App Factory Pattern
+
+The Flask app uses the factory pattern (`create_app()`) to support test isolation:
+
+```python
+from server import create_app
+
+# Production
+app = create_app()
+
+# Testing with custom config
+app = create_app({
+    "DATABASE": test_db_path,
+    "TESTING": True,
+    "CLASSIFICATION_ENABLED": False,
+})
+```
+
 ## Classifier Usage
 
 The classifier uses Claude to evaluate tweets against prompts stored in the database.
