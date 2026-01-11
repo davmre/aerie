@@ -59,7 +59,7 @@ The collector service includes web interfaces:
 - `/ui/read` - Clean reading view for approved tweets
 - `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
 
-Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics.
+Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics. The Read page groups tweets into "conversation chains" - see `database.py` for the algorithm.
 
 ## Design Principle: Context Symmetry
 
@@ -160,6 +160,8 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/modes` | GET | List available filtering modes |
 | `/stats` | GET | Database statistics (accepts `?mode=` for mode-specific stats) |
 | `/api/ui/tweets` | GET | Get tweets for web UI with full context |
+| `/api/ui/chains` | GET | Get conversation chains for Read page (paginated) |
+| `/api/ui/tweet/<id>/replies` | GET | Get tweet and its direct replies for modal view |
 | `/api/ui/label` | POST | Add human label for a tweet |
 | `/api/modes` | GET/POST | List modes or create new mode |
 | `/api/modes/<id>` | GET/PUT/DELETE | Get, update, or delete a mode |
