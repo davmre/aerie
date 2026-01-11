@@ -1109,6 +1109,27 @@ def get_thread_context_batch(
 # =============================================================================
 # Conversation Chains (for Read page)
 # =============================================================================
+#
+# The Read page displays tweets as "conversation chains" rather than individual
+# tweets. This provides a threaded view that groups related tweets together.
+#
+# Chain algorithm:
+# - Find "roots" (approved tweets whose parent is not approved or doesn't exist)
+# - From each root, follow the longest unambiguous path through replies
+# - At each node, pick the child with the deepest subtree
+# - If multiple children tie for max depth, stop (ambiguity) and mark them hidden
+# - Hidden replies are accessible via a modal popup with drill-down navigation
+#
+# Scalability:
+# - Paginate at the root level (not individual tweets)
+# - Compute chains on-demand per root, not all at once
+# - Uses BFS to find approved descendants of a single root
+#
+# Key functions:
+# - get_conversation_roots(): Find paginated roots via SQL
+# - compute_single_chain(): Build one chain from a root (scalable)
+# - get_replies_for_tweet(): Get direct replies for modal view
+# - compute_conversation_chains(): Original batch version (for tests)
 
 
 def get_direct_replies(

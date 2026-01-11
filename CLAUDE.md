@@ -56,18 +56,10 @@ Twitter's timeline data comes from `/graphql/.../HomeTimeline`, `/graphql/.../Ho
 The collector service includes web interfaces:
 
 - `/ui/label` - Labeling interface for creating ground truth data
-- `/ui/read` - Clean reading view for approved tweets (conversation chain view)
+- `/ui/read` - Clean reading view for approved tweets
 - `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
 
-Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics.
-
-### Read Page: Conversation Chains
-
-The Read page displays tweets as "conversation chains" rather than individual tweets:
-- **Chain selection**: At each reply, follows the longest unambiguous path
-- **Branch handling**: When multiple replies have equal depth, stops and shows count of hidden replies
-- **Modal navigation**: Hidden replies accessible via popup modal with drill-down navigation
-- **Scalable pagination**: Fetches conversation roots with SQL pagination, computes chains on-demand
+Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics. The Read page groups tweets into "conversation chains" - see `database.py` for the algorithm.
 
 ## Design Principle: Context Symmetry
 
