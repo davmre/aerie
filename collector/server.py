@@ -21,8 +21,11 @@ from database import (
     DEFAULT_DB_PATH,
     add_human_label,
     compute_single_chain,
+    count_modes_using_prompt,
     create_mode,
+    create_prompt,
     delete_mode,
+    delete_prompt,
     get_conversation_roots,
     get_mode,
     get_mode_decisions_batch,
@@ -42,6 +45,7 @@ from database import (
     store_tweets,
     transaction,
     update_mode,
+    update_prompt,
 )
 from extractors import EXTRACTOR_SCHEMAS, list_extractor_schemas
 from modes import (
@@ -566,15 +570,119 @@ def create_app(config=None):
         """List available prefilters with their schemas."""
         return jsonify({"prefilters": list_prefilter_schemas()})
 
+    # =========================================================================
+    # Prompts Management API
+    # =========================================================================
+
     @app.route("/api/prompts", methods=["GET"])
     def api_list_prompts():
-        """List prompts for dropdown."""
+        """List all prompts with full details and mode usage counts."""
         db_path = get_db_path()
         prompts = list_prompts(db_path)
-        # Return minimal info for dropdowns
-        return jsonify(
-            {"prompts": [{"id": p["id"], "created_at": p.get("created_at")} for p in prompts]}
+
+        result = []
+        for prompt in prompts:
+            prompt_data = dict(prompt)
+            prompt_data["mode_count"] = count_modes_using_prompt(prompt["id"], db_path)
+            result.append(prompt_data)
+
+        return jsonify({"prompts": result})
+
+    @app.route("/api/prompts/<prompt_id>", methods=["GET"])
+    def api_get_prompt(prompt_id):
+        """Get a single prompt with full details."""
+        db_path = get_db_path()
+        prompt = get_prompt(prompt_id, db_path)
+        if not prompt:
+            return jsonify({"error": "Prompt not found"}), 404
+
+        prompt_data = dict(prompt)
+        prompt_data["mode_count"] = count_modes_using_prompt(prompt_id, db_path)
+
+        return jsonify(prompt_data)
+
+    @app.route("/api/prompts", methods=["POST"])
+    def api_create_prompt():
+        """Create a new prompt."""
+        db_path = get_db_path()
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        # Validate required fields
+        if not data.get("id"):
+            return jsonify({"error": "Missing required field: id"}), 400
+        if not data.get("prompt_text"):
+            return jsonify({"error": "Missing required field: prompt_text"}), 400
+
+        # Validate ID format
+        prompt_id = data["id"]
+        if not prompt_id.replace("_", "").isalnum():
+            return jsonify({"error": "ID must contain only letters, numbers, and underscores"}), 400
+
+        # Check if prompt already exists
+        if get_prompt(prompt_id, db_path):
+            return jsonify({"error": f"Prompt already exists: {prompt_id}"}), 409
+
+        # Create prompt
+        create_prompt(
+            prompt_id=prompt_id,
+            prompt_text=data["prompt_text"],
+            response_schema=data.get("response_schema"),
+            db_path=db_path,
         )
+
+        # Return the created prompt
+        prompt = get_prompt(prompt_id, db_path)
+        assert prompt is not None  # We just created it
+        prompt_data = dict(prompt)
+        prompt_data["mode_count"] = 0
+        return jsonify({"status": "ok", "prompt": prompt_data})
+
+    @app.route("/api/prompts/<prompt_id>", methods=["PUT"])
+    def api_update_prompt(prompt_id):
+        """Update an existing prompt."""
+        db_path = get_db_path()
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        if not get_prompt(prompt_id, db_path):
+            return jsonify({"error": "Prompt not found"}), 404
+
+        # Determine what to clear vs update
+        clear_response_schema = "response_schema" in data and not data.get("response_schema")
+
+        update_prompt(
+            prompt_id=prompt_id,
+            prompt_text=data.get("prompt_text"),
+            response_schema=data.get("response_schema") if not clear_response_schema else None,
+            clear_response_schema=clear_response_schema,
+            db_path=db_path,
+        )
+
+        # Return updated prompt
+        prompt = get_prompt(prompt_id, db_path)
+        assert prompt is not None  # We just updated it
+        prompt_data = dict(prompt)
+        prompt_data["mode_count"] = count_modes_using_prompt(prompt_id, db_path)
+        return jsonify({"status": "ok", "prompt": prompt_data})
+
+    @app.route("/api/prompts/<prompt_id>", methods=["DELETE"])
+    def api_delete_prompt(prompt_id):
+        """Delete a prompt."""
+        db_path = get_db_path()
+
+        if not get_prompt(prompt_id, db_path):
+            return jsonify({"error": "Prompt not found"}), 404
+
+        force = request.args.get("force", "").lower() == "true"
+        result = delete_prompt(prompt_id, force=force, db_path=db_path)
+
+        if "error" in result:
+            return jsonify(result), 409
+
+        return jsonify(result)
 
     # =========================================================================
     # Web UI Routes
@@ -601,6 +709,13 @@ def create_app(config=None):
         modes = get_available_modes(db_path)
         prompts = list_prompts(db_path)
         return render_template("modes.html", modes=modes, prompts=prompts, active_page="modes")
+
+    @app.route("/ui/prompts")
+    def ui_prompts():
+        """Prompts management interface."""
+        db_path = get_db_path()
+        modes = get_available_modes(db_path)
+        return render_template("prompts.html", modes=modes, active_page="prompts")
 
     @app.route("/api/ui/tweets", methods=["GET"])
     def api_ui_tweets():
