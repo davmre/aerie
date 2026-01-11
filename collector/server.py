@@ -11,31 +11,50 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Optional
 
-from flask import Flask, request, jsonify, render_template, current_app
-from database import (
-    init_database, store_tweets, store_retweets, get_stats, list_modes,
-    add_human_label, transaction, get_prompt_responses_batch,
-    get_retweets_batch, get_tweets_batch, get_thread_context_batch, get_mode,
-    create_mode, update_mode, delete_mode, get_mode_label_counts, list_prompts,
-    get_prompt, get_mode_decisions_batch, invalidate_mode_decisions,
-    DEFAULT_DB_PATH,
-)
-from modes import (
-    decide_tweets_batch, get_mode_status_for_all_tweets, get_available_modes,
-    get_mode_stats, compute_mode_decisions, compute_mode_decisions_for_tweets,
-)
-from classifier import setup_prompts_and_modes
-from extractors import list_extractor_schemas, get_extractor_with_config, EXTRACTOR_SCHEMAS
-from prefilters import list_prefilter_schemas, get_prefilter_with_config, PREFILTER_SCHEMAS
-from classification_queue import get_classification_queue, Priority
+from flask import Flask, current_app, jsonify, render_template, request
+
 from batch_classifier import classify_and_store_batch
+from classification_queue import Priority, get_classification_queue
+from classifier import setup_prompts_and_modes
+from database import (
+    DEFAULT_DB_PATH,
+    add_human_label,
+    create_mode,
+    delete_mode,
+    get_mode,
+    get_mode_decisions_batch,
+    get_mode_label_counts,
+    get_prompt,
+    get_prompt_responses_batch,
+    get_retweets_batch,
+    get_stats,
+    get_thread_context_batch,
+    get_tweets_batch,
+    invalidate_mode_decisions,
+    list_modes,
+    list_prompts,
+    store_retweets,
+    store_tweets,
+    transaction,
+    update_mode,
+)
+from extractors import EXTRACTOR_SCHEMAS, list_extractor_schemas
+from modes import (
+    compute_mode_decisions,
+    compute_mode_decisions_for_tweets,
+    decide_tweets_batch,
+    get_available_modes,
+    get_mode_stats,
+    get_mode_status_for_all_tweets,
+)
+from prefilters import PREFILTER_SCHEMAS, list_prefilter_schemas
 
 
 def get_db_path() -> Path:
     """Get database path from current app config."""
     return Path(current_app.config["DATABASE"])
+
 
 # =============================================================================
 # Classification Worker Configuration
@@ -49,7 +68,7 @@ DEFAULT_CLASSIFICATION_CONFIG = {
     "default_prompt_id": "binary_filter_v1",
 }
 
-_worker_thread: Optional[threading.Thread] = None
+_worker_thread: threading.Thread | None = None
 _worker_lock = threading.Lock()
 
 
@@ -169,7 +188,7 @@ def create_app(config=None):
     @app.before_request
     def ensure_db():
         """Initialize database and start worker on first request."""
-        if not hasattr(app, '_db_initialized'):
+        if not hasattr(app, "_db_initialized"):
             db_path = Path(app.config["DATABASE"])
             setup_prompts_and_modes(db_path)
             if not app.config["TESTING"]:
@@ -218,15 +237,16 @@ def create_app(config=None):
             tweet_ids = [t["id"] for t in tweets if "id" in t]
             queue.enqueue_batch(tweet_ids, prompt_id, Priority.NORMAL)
 
-        return jsonify({
-            "status": "ok",
-            "received": len(tweets),
-            "inserted": result["inserted"],
-            "duplicates": result["duplicates"],
-            "retweets_received": len(retweets),
-            "retweets_inserted": rt_result["inserted"],
-        })
-
+        return jsonify(
+            {
+                "status": "ok",
+                "received": len(tweets),
+                "inserted": result["inserted"],
+                "duplicates": result["duplicates"],
+                "retweets_received": len(retweets),
+                "retweets_inserted": rt_result["inserted"],
+            }
+        )
 
     @app.route("/stats", methods=["GET"])
     def stats():
@@ -274,14 +294,15 @@ def create_app(config=None):
 
         # Queue pending/unknown tweets for classification with HIGH priority
         # (these are actively visible on the user's screen)
-        pending_ids = [
-            tid for tid, status in statuses.items()
-            if status in ("pending", "unknown")
-        ]
+        pending_ids = [tid for tid, status in statuses.items() if status in ("pending", "unknown")]
         if pending_ids:
             queue = get_classification_queue()
             mode = get_mode(mode_id, db_path)
-            prompt_id = mode["prompt_id"] if mode else current_app.config["CLASSIFICATION_CONFIG"]["default_prompt_id"]
+            prompt_id = (
+                mode["prompt_id"]
+                if mode
+                else current_app.config["CLASSIFICATION_CONFIG"]["default_prompt_id"]
+            )
             queue.enqueue_batch(pending_ids, prompt_id, Priority.HIGH)
 
         return jsonify(statuses)
@@ -313,7 +334,6 @@ def create_app(config=None):
     def health():
         """Health check endpoint."""
         return jsonify({"status": "ok"})
-
 
     # =========================================================================
     # Modes Management API
@@ -422,7 +442,6 @@ def create_app(config=None):
         assert mode is not None  # We just created it
         return jsonify({"status": "ok", "mode": _parse_mode_config(mode)})
 
-
     @app.route("/api/modes/<mode_id>", methods=["PUT"])
     def api_update_mode(mode_id):
         """Update an existing mode."""
@@ -469,13 +488,15 @@ def create_app(config=None):
         )
 
         # Invalidate and recompute cached decisions if config changed
-        config_changed = any([
-            data.get("prompt_id"),
-            data.get("extractor"),
-            "prefilter" in data,
-            "extractor_config" in data,
-            "prefilter_config" in data,
-        ])
+        config_changed = any(
+            [
+                data.get("prompt_id"),
+                data.get("extractor"),
+                "prefilter" in data,
+                "extractor_config" in data,
+                "prefilter_config" in data,
+            ]
+        )
         if config_changed:
             invalidate_mode_decisions(mode_id, db_path)
             compute_mode_decisions(mode_id, db_path=db_path)
@@ -522,10 +543,9 @@ def create_app(config=None):
         db_path = get_db_path()
         prompts = list_prompts(db_path)
         # Return minimal info for dropdowns
-        return jsonify({
-            "prompts": [{"id": p["id"], "created_at": p.get("created_at")} for p in prompts]
-        })
-
+        return jsonify(
+            {"prompts": [{"id": p["id"], "created_at": p.get("created_at")} for p in prompts]}
+        )
 
     # =========================================================================
     # Web UI Routes
@@ -697,20 +717,25 @@ def create_app(config=None):
                 for tid, resp in responses.items():
                     if tid not in responses_by_tweet:
                         responses_by_tweet[tid] = []
-                    responses_by_tweet[tid].append({
-                        "prompt_id": pid,
-                        "model": resp.get("model"),
-                        "response": resp.get("response"),
-                    })
+                    responses_by_tweet[tid].append(
+                        {
+                            "prompt_id": pid,
+                            "model": resp.get("model"),
+                            "response": resp.get("response"),
+                        }
+                    )
 
         # Get human labels
         human_labels = {}
         with transaction(db_path) as conn:
             placeholders = ",".join("?" * len(tweet_ids))
-            rows = conn.execute(f"""
+            rows = conn.execute(
+                f"""
                 SELECT tweet_id, should_show FROM human_labels
                 WHERE tweet_id IN ({placeholders}) AND mode_id = ?
-            """, (*tweet_ids, mode_id)).fetchall()
+            """,
+                (*tweet_ids, mode_id),
+            ).fetchall()
             for row in rows:
                 human_labels[row["tweet_id"]] = bool(row["should_show"])
 

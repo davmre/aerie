@@ -1,17 +1,15 @@
 """Tests for the batch classifier."""
 
-import json
 from unittest.mock import Mock, patch
 
-import pytest
 from anthropic.types import TextBlock
 
 from batch_classifier import (
+    build_batch_prompt,
+    classify_tweets_batch,
     format_tweet_for_batch,
     format_tweets_batch,
-    build_batch_prompt,
     parse_batch_response,
-    classify_tweets_batch,
 )
 
 
@@ -128,10 +126,10 @@ class TestResponseParsing:
 
     def test_parse_valid_json_array(self):
         """Parse a well-formed JSON array response."""
-        response = '''[
+        response = """[
             {"id": "123", "approved": true, "reason": "Good content"},
             {"id": "456", "approved": false, "reason": "Spam"}
-        ]'''
+        ]"""
 
         result = parse_batch_response(response, ["123", "456"])
 
@@ -142,13 +140,13 @@ class TestResponseParsing:
 
     def test_parse_json_with_surrounding_text(self):
         """Parse JSON array even with surrounding text."""
-        response = '''Here are my classifications:
+        response = """Here are my classifications:
 
         [
             {"id": "123", "approved": true, "reason": "Informative"}
         ]
 
-        Let me know if you need anything else.'''
+        Let me know if you need anything else."""
 
         result = parse_batch_response(response, ["123"])
 
@@ -174,8 +172,8 @@ class TestResponseParsing:
 
     def test_parse_extracts_individual_objects(self):
         """Can extract individual JSON objects when array parsing fails."""
-        response = '''Tweet 1: {"id": "123", "approved": true, "reason": "Good"}
-        Tweet 2: {"id": "456", "approved": false, "reason": "Bad"}'''
+        response = """Tweet 1: {"id": "123", "approved": true, "reason": "Good"}
+        Tweet 2: {"id": "456", "approved": false, "reason": "Bad"}"""
 
         result = parse_batch_response(response, ["123", "456"])
 
@@ -224,7 +222,9 @@ class TestClassifyTweetsBatch:
         mock_client = Mock()
         mock_anthropic_class.return_value = mock_client
         mock_response = Mock()
-        mock_response.content = [TextBlock(type="text", text='[{"id": "123", "approved": true, "reason": "Good"}]')]
+        mock_response.content = [
+            TextBlock(type="text", text='[{"id": "123", "approved": true, "reason": "Good"}]')
+        ]
         mock_client.messages.create.return_value = mock_response
 
         tweets = [{"id": "123", "text": "Test tweet", "author_username": "user"}]
@@ -297,6 +297,7 @@ class TestClassifyTweetsBatch:
         with patch.dict("os.environ", {}, clear=True):
             # Remove ANTHROPIC_API_KEY if present
             import os
+
             os.environ.pop("ANTHROPIC_API_KEY", None)
 
             with patch("batch_classifier.get_prompt") as mock_get_prompt:

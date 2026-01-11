@@ -1,13 +1,11 @@
 """Integration tests for the Read view API."""
 
-import pytest
-
 from tests.fixtures import (
-    make_tweet,
-    make_thread,
     approve_tweets,
-    filter_tweets,
     create_and_store_tweets,
+    filter_tweets,
+    make_thread,
+    make_tweet,
 )
 
 

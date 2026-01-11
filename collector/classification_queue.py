@@ -11,22 +11,24 @@ import threading
 import time
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Optional
 
 
 class Priority(IntEnum):
     """Classification priority levels."""
-    HIGH = 1    # Tweets being actively checked by extension (visible on screen)
+
+    HIGH = 1  # Tweets being actively checked by extension (visible on screen)
     NORMAL = 2  # Newly captured tweets (not yet visible)
 
 
 @dataclass(order=True)
 class ClassificationJob:
     """A tweet classification job in the queue."""
+
     priority: Priority
     added_at: float = field(compare=True)
     tweet_id: str = field(compare=False)
     prompt_id: str = field(compare=False)
+    mode_id: str = field(compare=False)
 
 
 class ClassificationQueue:
@@ -51,6 +53,7 @@ class ClassificationQueue:
         self,
         tweet_id: str,
         prompt_id: str,
+        mode_id: str,
         priority: Priority = Priority.NORMAL,
     ) -> bool:
         """
@@ -77,6 +80,7 @@ class ClassificationQueue:
                 added_at=time.time(),
                 tweet_id=tweet_id,
                 prompt_id=prompt_id,
+                mode_id=mode_id,
             )
             self._queue.put(job)
             self._pending.add(tweet_id)
@@ -86,6 +90,7 @@ class ClassificationQueue:
         self,
         tweet_ids: list[str],
         prompt_id: str,
+        mode_id: str,
         priority: Priority = Priority.NORMAL,
     ) -> int:
         """
@@ -95,7 +100,7 @@ class ClassificationQueue:
         """
         added = 0
         for tweet_id in tweet_ids:
-            if self.enqueue(tweet_id, prompt_id, priority):
+            if self.enqueue(tweet_id, prompt_id, mode_id, priority):
                 added += 1
         return added
 
@@ -169,7 +174,7 @@ class ClassificationQueue:
 
 
 # Global queue instance
-_queue: Optional[ClassificationQueue] = None
+_queue: ClassificationQueue | None = None
 _queue_lock = threading.Lock()
 
 

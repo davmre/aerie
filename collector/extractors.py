@@ -23,9 +23,11 @@ def topic_contains(topic: str):
 
     Usage in modes table: "extractors.topic_ml" (requires registering the function)
     """
+
     def extractor(response: dict[str, Any]) -> bool:
         topics = response.get("topics", [])
         return topic.lower() in [t.lower() for t in topics]
+
     return extractor
 
 
@@ -34,10 +36,12 @@ def low_toxicity(threshold: float = 0.3):
     Factory for toxicity threshold extractors.
     Returns True if toxicity score is below threshold.
     """
+
     def extractor(response: dict[str, Any]) -> bool:
         scores = response.get("scores", {})
         toxicity = scores.get("toxicity", 0.0)
         return toxicity < threshold
+
     return extractor
 
 
@@ -48,14 +52,17 @@ def combined(*conditions):
     Example:
         combined(topic_contains("ml"), low_toxicity(0.2))
     """
+
     def extractor(response: dict[str, Any]) -> bool:
         return all(cond(response) for cond in conditions)
+
     return extractor
 
 
 # =============================================================================
 # Pre-built extractors for common modes
 # =============================================================================
+
 
 # Simple binary approval
 def default(response: dict[str, Any]) -> bool:
@@ -93,11 +100,7 @@ def high_quality(response: dict[str, Any]) -> bool:
     engagement_bait = scores.get("engagement_bait", 1.0)
     informativeness = scores.get("informativeness", 0.0)
 
-    return (
-        toxicity < 0.2 and
-        engagement_bait < 0.3 and
-        informativeness > 0.4
-    )
+    return toxicity < 0.2 and engagement_bait < 0.3 and informativeness > 0.4
 
 
 def chill_vibes(response: dict[str, Any]) -> bool:
@@ -212,7 +215,9 @@ def get_extractor_with_config(name: str, config: dict | None = None):
             threshold = config.get("threshold", 0.3)
             return low_toxicity(threshold)
         else:
-            raise KeyError(f"Factory extractor '{name}' not implemented in get_extractor_with_config")
+            raise KeyError(
+                f"Factory extractor '{name}' not implemented in get_extractor_with_config"
+            )
 
     # Simple extractor - just look it up
     return get_extractor(name)

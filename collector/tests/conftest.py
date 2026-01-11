@@ -1,9 +1,7 @@
 """Pytest fixtures for Aerie collector tests."""
 
 import pytest
-from pathlib import Path
 
-from database import init_database
 from classifier import setup_prompts_and_modes
 from server import create_app
 
@@ -19,11 +17,13 @@ def test_db(tmp_path):
 @pytest.fixture
 def app(test_db):
     """Create Flask app configured with test database."""
-    app = create_app({
-        "DATABASE": test_db,
-        "TESTING": True,
-        "CLASSIFICATION_ENABLED": False,
-    })
+    app = create_app(
+        {
+            "DATABASE": test_db,
+            "TESTING": True,
+            "CLASSIFICATION_ENABLED": False,
+        }
+    )
     return app
 
 

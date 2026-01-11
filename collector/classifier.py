@@ -17,18 +17,17 @@ from anthropic.types import TextBlock
 
 from database import (
     DEFAULT_DB_PATH,
-    create_prompt,
     create_mode,
+    create_prompt,
     get_prompt,
-    get_tweets_without_response,
     get_stats,
-    list_prompts,
-    list_modes,
-    store_prompt_response,
+    get_tweets_without_response,
     init_database,
+    list_modes,
+    list_prompts,
+    store_prompt_response,
 )
 from modes import compute_all_mode_decisions
-
 
 # =============================================================================
 # Built-in Prompts
@@ -178,9 +177,7 @@ def call_llm(
             model=model,
             max_tokens=200,
             system=system_prompt,
-            messages=[
-                {"role": "user", "content": f"Analyze this tweet:\n\n{tweet_text}"}
-            ],
+            messages=[{"role": "user", "content": f"Analyze this tweet:\n\n{tweet_text}"}],
         )
 
         first_block = response.content[0]
@@ -362,7 +359,7 @@ def cmd_list_prompts(args):
     for p in prompts:
         print(f"\n  {p['id']}")
         print(f"    Created: {p['created_at']}")
-        preview = p['prompt_text'][:100].replace('\n', ' ')
+        preview = p["prompt_text"][:100].replace("\n", " ")
         print(f"    Preview: {preview}...")
 
 
@@ -379,9 +376,9 @@ def cmd_list_modes(args):
         print(f"\n  {m['id']} - {m['name']}")
         print(f"    Prompt: {m['prompt_id']}")
         print(f"    Extractor: {m['extractor']}")
-        if m['prefilter']:
+        if m["prefilter"]:
             print(f"    Prefilter: {m['prefilter']}")
-        if m['description']:
+        if m["description"]:
             print(f"    Description: {m['description']}")
 
 
@@ -429,8 +426,8 @@ def cmd_recompute_decisions(args):
     print(f"Recomputing decisions for {len(modes)} modes...")
     print()
 
-    from modes import compute_mode_decisions
     from database import invalidate_mode_decisions
+    from modes import compute_mode_decisions
 
     for mode in modes:
         mode_id = mode["id"]
@@ -466,9 +463,7 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # classify command
-    classify_parser = subparsers.add_parser(
-        "classify", help="Run classification for a prompt"
-    )
+    classify_parser = subparsers.add_parser("classify", help="Run classification for a prompt")
     classify_parser.add_argument(
         "prompt",
         nargs="?",
@@ -481,24 +476,28 @@ def main():
         help="Claude model to use",
     )
     classify_parser.add_argument(
-        "--batch-size", "-b",
+        "--batch-size",
+        "-b",
         type=int,
         default=10,
         help="Tweets per batch (default: 10)",
     )
     classify_parser.add_argument(
-        "--max", "-m",
+        "--max",
+        "-m",
         type=int,
         dest="max_tweets",
         help="Maximum tweets to classify",
     )
     classify_parser.add_argument(
-        "--dry-run", "-n",
+        "--dry-run",
+        "-n",
         action="store_true",
         help="Don't save results",
     )
     classify_parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Show detailed output",
     )
@@ -513,9 +512,7 @@ def main():
     modes_parser.set_defaults(func=cmd_list_modes)
 
     # create-prompt command
-    create_prompt_parser = subparsers.add_parser(
-        "create-prompt", help="Create a prompt from file"
-    )
+    create_prompt_parser = subparsers.add_parser("create-prompt", help="Create a prompt from file")
     create_prompt_parser.add_argument("id", help="Prompt ID")
     create_prompt_parser.add_argument("file", type=Path, help="Prompt text file")
     create_prompt_parser.add_argument("--schema", help="JSON schema for response")

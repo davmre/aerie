@@ -6,16 +6,14 @@ This migrates tweets that have classification_status='completed' in the old sche
 to prompt_responses entries for the 'binary_filter_v1' prompt.
 """
 
-import json
 from pathlib import Path
 
+from classifier import setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
-    init_database,
-    transaction,
     store_prompt_response,
+    transaction,
 )
-from classifier import setup_prompts_and_modes
 
 
 def migrate_legacy_classifications(db_path: Path = DEFAULT_DB_PATH, dry_run: bool = False):

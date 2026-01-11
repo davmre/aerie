@@ -88,11 +88,7 @@ def skip_replies(tweet: dict[str, Any]) -> bool | None:
 
 def only_original(tweet: dict[str, Any]) -> bool | None:
     """Only show original tweets (not retweets, quotes, or replies)."""
-    if (
-        tweet.get("is_retweet")
-        or tweet.get("is_quote")
-        or tweet.get("reply_to_tweet_id")
-    ):
+    if tweet.get("is_retweet") or tweet.get("is_quote") or tweet.get("reply_to_tweet_id"):
         return False
     return None
 
@@ -299,9 +295,7 @@ def get_prefilter(name: str):
     if not name:
         return None
     if name not in PREFILTERS:
-        raise KeyError(
-            f"Unknown prefilter: {name}. Available: {list(PREFILTERS.keys())}"
-        )
+        raise KeyError(f"Unknown prefilter: {name}. Available: {list(PREFILTERS.keys())}")
     return PREFILTERS[name]
 
 

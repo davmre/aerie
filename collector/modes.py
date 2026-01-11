@@ -7,17 +7,13 @@ a tweet should be shown for a given mode, using prefilters and extractors.
 
 import json
 from pathlib import Path
-from typing import Any
 
 from database import (
     DEFAULT_DB_PATH,
-    get_all_tweet_ids,
     get_cached_decision_stats,
     get_mode,
-    get_mode_decisions_batch,
     get_prompt_response,
     get_prompt_responses_batch,
-    get_tweet,
     get_tweets_batch,
     get_tweets_without_decision,
     list_modes,
@@ -85,9 +81,7 @@ def decide_tweet(
                 return result
 
     # 2. Need LLM response - check if we have one cached
-    response_record = get_prompt_response(
-        tweet["id"], mode["prompt_id"], model, db_path
-    )
+    response_record = get_prompt_response(tweet["id"], mode["prompt_id"], model, db_path)
 
     if not response_record:
         raise NeedsClassification(tweet["id"], mode["prompt_id"])
@@ -240,7 +234,11 @@ def compute_mode_decisions(
     prefilter_config = _parse_config(mode.get("prefilter_config"))
     extractor_config = _parse_config(mode.get("extractor_config"))
 
-    prefilter_fn = get_prefilter_with_config(mode["prefilter"], prefilter_config) if mode["prefilter"] else None
+    prefilter_fn = (
+        get_prefilter_with_config(mode["prefilter"], prefilter_config)
+        if mode["prefilter"]
+        else None
+    )
     extractor_fn = get_extractor_with_config(mode["extractor"], extractor_config)
 
     computed = 0
@@ -265,12 +263,14 @@ def compute_mode_decisions(
             decisions_to_store = []
             for tweet in tweets:
                 result = prefilter_fn(tweet)
-                decisions_to_store.append({
-                    "tweet_id": tweet["id"],
-                    "mode_id": mode_id,
-                    "decision": "approved" if result else "filtered",
-                    "source": "prefilter",
-                })
+                decisions_to_store.append(
+                    {
+                        "tweet_id": tweet["id"],
+                        "mode_id": mode_id,
+                        "decision": "approved" if result else "filtered",
+                        "source": "prefilter",
+                    }
+                )
 
             if decisions_to_store:
                 store_mode_decisions_batch(decisions_to_store, db_path)
@@ -307,12 +307,14 @@ def compute_mode_decisions(
         if prefilter_fn:
             prefilter_result = prefilter_fn(tweet)
             if prefilter_result is not None:
-                decisions_to_store.append({
-                    "tweet_id": tweet_id,
-                    "mode_id": mode_id,
-                    "decision": "approved" if prefilter_result else "filtered",
-                    "source": "prefilter",
-                })
+                decisions_to_store.append(
+                    {
+                        "tweet_id": tweet_id,
+                        "mode_id": mode_id,
+                        "decision": "approved" if prefilter_result else "filtered",
+                        "source": "prefilter",
+                    }
+                )
                 continue
 
         # Apply extractor to prompt response
@@ -322,12 +324,14 @@ def compute_mode_decisions(
                 continue  # Skip error responses, they stay pending
 
             approved = extractor_fn(response)
-            decisions_to_store.append({
-                "tweet_id": tweet_id,
-                "mode_id": mode_id,
-                "decision": "approved" if approved else "filtered",
-                "source": "extractor",
-            })
+            decisions_to_store.append(
+                {
+                    "tweet_id": tweet_id,
+                    "mode_id": mode_id,
+                    "decision": "approved" if approved else "filtered",
+                    "source": "extractor",
+                }
+            )
         except Exception:
             continue  # Skip on error
 
@@ -339,8 +343,7 @@ def compute_mode_decisions(
     with transaction(db_path) as conn:
         total = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
         decided = conn.execute(
-            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ?",
-            (mode_id,)
+            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ?", (mode_id,)
         ).fetchone()[0]
         pending = total - decided
 
@@ -388,10 +391,11 @@ def get_mode_stats(
 def compute_mode_decisions_for_tweets(
     tweet_ids: list[str],
     model: str | None = None,
+    mode_ids: list[str] | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, str]]:
     """
-    Compute and cache decisions for specific tweets across all modes.
+    Compute and cache decisions for specific tweets across modes.
 
     This is more efficient than compute_all_mode_decisions() when you only
     need to update decisions for a small set of tweets (e.g., after
@@ -400,15 +404,27 @@ def compute_mode_decisions_for_tweets(
     Args:
         tweet_ids: List of tweet IDs to compute decisions for.
         model: Optional model filter for prompt responses.
+        mode_ids: Optional list of mode IDs to compute for. If None, computes
+            for all modes.
         db_path: Database path.
 
     Returns:
-        Dict mapping tweet_id -> {mode_id: decision} for all modes.
+        Dict mapping tweet_id -> {mode_id: decision} for computed modes.
     """
     if not tweet_ids:
         return {}
 
-    modes = list_modes(db_path)
+    all_modes = list_modes(db_path)
+    if not all_modes:
+        return {}
+
+    # Filter to requested modes if specified
+    if mode_ids is not None:
+        mode_id_set = set(mode_ids)
+        modes = [m for m in all_modes if m["id"] in mode_id_set]
+    else:
+        modes = all_modes
+
     if not modes:
         return {}
 
@@ -439,9 +455,11 @@ def compute_mode_decisions_for_tweets(
         prefilter_config = _parse_config(mode.get("prefilter_config"))
         extractor_config = _parse_config(mode.get("extractor_config"))
 
-        prefilter_fn = get_prefilter_with_config(
-            mode["prefilter"], prefilter_config
-        ) if mode["prefilter"] else None
+        prefilter_fn = (
+            get_prefilter_with_config(mode["prefilter"], prefilter_config)
+            if mode["prefilter"]
+            else None
+        )
         extractor_fn = get_extractor_with_config(mode["extractor"], extractor_config)
 
         responses = responses_by_prompt.get(prompt_id, {})
@@ -458,12 +476,14 @@ def compute_mode_decisions_for_tweets(
                 if prefilter_result is not None:
                     decision = "approved" if prefilter_result else "filtered"
                     results[tweet_id][mode_id] = decision
-                    decisions_to_store.append({
-                        "tweet_id": tweet_id,
-                        "mode_id": mode_id,
-                        "decision": decision,
-                        "source": "prefilter",
-                    })
+                    decisions_to_store.append(
+                        {
+                            "tweet_id": tweet_id,
+                            "mode_id": mode_id,
+                            "decision": decision,
+                            "source": "prefilter",
+                        }
+                    )
                     continue
 
             # Need prompt response for extractor
@@ -483,12 +503,14 @@ def compute_mode_decisions_for_tweets(
                 approved = extractor_fn(response)
                 decision = "approved" if approved else "filtered"
                 results[tweet_id][mode_id] = decision
-                decisions_to_store.append({
-                    "tweet_id": tweet_id,
-                    "mode_id": mode_id,
-                    "decision": decision,
-                    "source": "extractor",
-                })
+                decisions_to_store.append(
+                    {
+                        "tweet_id": tweet_id,
+                        "mode_id": mode_id,
+                        "decision": decision,
+                        "source": "extractor",
+                    }
+                )
             except Exception:
                 continue  # Leave as pending on error
 

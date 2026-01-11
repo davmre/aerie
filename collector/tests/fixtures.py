@@ -3,7 +3,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from database import store_tweets, store_mode_decisions_batch
+from database import store_mode_decisions_batch, store_tweets
 
 
 def make_tweet(
@@ -77,13 +77,15 @@ def make_thread(base_id: int, length: int, author: str = "testuser") -> list[dic
         tweet_id = str(base_id + i)
         reply_to = str(base_id + i - 1) if i > 0 else None
 
-        tweets.append(make_tweet(
-            id=tweet_id,
-            text=f"Thread tweet {i + 1}",
-            author_username=author,
-            reply_to_tweet_id=reply_to,
-            reply_to_username=author if reply_to else None,
-        ))
+        tweets.append(
+            make_tweet(
+                id=tweet_id,
+                text=f"Thread tweet {i + 1}",
+                author_username=author,
+                reply_to_tweet_id=reply_to,
+                reply_to_username=author if reply_to else None,
+            )
+        )
 
     return tweets
 

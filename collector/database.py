@@ -277,9 +277,13 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         author.get("username"),
                         author.get("display_name"),
                         1 if author.get("verified") else 0,
-                        1 if author.get("blue_verified") else (0 if author.get("blue_verified") is False else None),
+                        1
+                        if author.get("blue_verified")
+                        else (0 if author.get("blue_verified") is False else None),
                         author.get("bio"),
-                        1 if author.get("following") else (0 if author.get("following") is False else None),
+                        1
+                        if author.get("following")
+                        else (0 if author.get("following") is False else None),
                         author.get("followers_count"),
                         tweet.get("metrics", {}).get("retweet_count", 0),
                         tweet.get("metrics", {}).get("reply_count", 0),
@@ -369,7 +373,9 @@ def get_retweets_for_tweet(tweet_id: str, db_path: Path = DEFAULT_DB_PATH) -> li
         return [dict(row) for row in rows]
 
 
-def get_retweets_batch(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, list[dict]]:
+def get_retweets_batch(
+    tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, list[dict]]:
     """Get retweet records for multiple tweets at once."""
     if not tweet_ids:
         return {}
@@ -452,18 +458,14 @@ def create_prompt(
 def get_prompt(prompt_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
     """Get a prompt by ID."""
     with transaction(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM prompts WHERE id = ?", (prompt_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM prompts WHERE id = ?", (prompt_id,)).fetchone()
         return dict(row) if row else None
 
 
 def list_prompts(db_path: Path = DEFAULT_DB_PATH) -> list[dict]:
     """List all prompts."""
     with transaction(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM prompts ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM prompts ORDER BY created_at DESC").fetchall()
         return [dict(row) for row in rows]
 
 
@@ -502,9 +504,7 @@ def create_mode(
 def get_mode(mode_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
     """Get a mode by ID."""
     with transaction(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM modes WHERE id = ?", (mode_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM modes WHERE id = ?", (mode_id,)).fetchone()
         return dict(row) if row else None
 
 
@@ -536,9 +536,7 @@ def update_mode(
     """
     with transaction(db_path) as conn:
         # Check mode exists
-        existing = conn.execute(
-            "SELECT id FROM modes WHERE id = ?", (mode_id,)
-        ).fetchone()
+        existing = conn.execute("SELECT id FROM modes WHERE id = ?", (mode_id,)).fetchone()
         if not existing:
             return False
 
@@ -888,10 +886,7 @@ def store_mode_decisions_batch(
             (tweet_id, mode_id, decision, source, computed_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            [
-                (d["tweet_id"], d["mode_id"], d["decision"], d["source"], now)
-                for d in decisions
-            ],
+            [(d["tweet_id"], d["mode_id"], d["decision"], d["source"], now) for d in decisions],
         )
         return len(decisions)
 
@@ -1029,15 +1024,11 @@ def get_all_tweet_ids(db_path: Path = DEFAULT_DB_PATH) -> list[str]:
 def get_tweet(tweet_id: str, db_path: Path = DEFAULT_DB_PATH) -> dict | None:
     """Get a single tweet by ID."""
     with transaction(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM tweets WHERE id = ?", (tweet_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM tweets WHERE id = ?", (tweet_id,)).fetchone()
         return dict(row) if row else None
 
 
-def get_tweets_batch(
-    tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH
-) -> dict[str, dict]:
+def get_tweets_batch(tweet_ids: list[str], db_path: Path = DEFAULT_DB_PATH) -> dict[str, dict]:
     """Get multiple tweets by ID."""
     if not tweet_ids:
         return {}
@@ -1068,8 +1059,7 @@ def get_thread_ancestors(
     with transaction(db_path) as conn:
         # First get the original tweet to know the author
         original = conn.execute(
-            "SELECT author_username, reply_to_tweet_id FROM tweets WHERE id = ?",
-            (current_id,)
+            "SELECT author_username, reply_to_tweet_id FROM tweets WHERE id = ?", (current_id,)
         ).fetchone()
 
         if not original or not original["reply_to_tweet_id"]:
@@ -1079,9 +1069,7 @@ def get_thread_ancestors(
         current_id = original["reply_to_tweet_id"]
 
         for _ in range(max_depth):
-            row = conn.execute(
-                "SELECT * FROM tweets WHERE id = ?", (current_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM tweets WHERE id = ?", (current_id,)).fetchone()
 
             if not row:
                 # Parent not in database

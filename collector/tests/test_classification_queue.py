@@ -1,15 +1,12 @@
 """Tests for the classification queue."""
 
-import time
 import threading
-
-import pytest
+import time
 
 from classification_queue import (
-    ClassificationQueue,
     ClassificationJob,
+    ClassificationQueue,
     Priority,
-    get_classification_queue,
 )
 
 
@@ -187,10 +184,7 @@ class TestThreadSafety:
                     added += 1
             results.append(added)
 
-        threads = [
-            threading.Thread(target=enqueue_range, args=(i * 100, 100))
-            for i in range(5)
-        ]
+        threads = [threading.Thread(target=enqueue_range, args=(i * 100, 100)) for i in range(5)]
 
         for t in threads:
             t.start()

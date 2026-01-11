@@ -10,13 +10,11 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 import anthropic
 from anthropic.types import TextBlock
 
-from database import get_prompt, store_prompt_response, DEFAULT_DB_PATH
-
+from database import DEFAULT_DB_PATH, get_prompt, store_prompt_response
 
 # Default model for classification
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
@@ -132,7 +130,7 @@ def parse_batch_response(
 
     # If direct parse didn't work, try to find JSON array in the response
     if not results:
-        array_match = re.search(r'\[[\s\S]*\]', response_text)
+        array_match = re.search(r"\[[\s\S]*\]", response_text)
         if array_match:
             try:
                 parsed = json.loads(array_match.group())
@@ -170,7 +168,7 @@ def classify_tweets_batch(
     tweets: list[dict],
     prompt_id: str,
     model: str = DEFAULT_MODEL,
-    client: Optional[anthropic.Anthropic] = None,
+    client: anthropic.Anthropic | None = None,
 ) -> dict[str, dict]:
     """
     Classify multiple tweets in a single LLM request.
@@ -191,19 +189,13 @@ def classify_tweets_batch(
     # Get the prompt
     prompt = get_prompt(prompt_id)
     if not prompt:
-        return {
-            t["id"]: {"_error": "prompt_not_found", "_prompt_id": prompt_id}
-            for t in tweets
-        }
+        return {t["id"]: {"_error": "prompt_not_found", "_prompt_id": prompt_id} for t in tweets}
 
     # Create client if needed
     if client is None:
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
-            return {
-                t["id"]: {"_error": "no_api_key"}
-                for t in tweets
-            }
+            return {t["id"]: {"_error": "no_api_key"} for t in tweets}
         client = anthropic.Anthropic(api_key=api_key)
 
     # Build the batch prompt and format tweets
@@ -216,9 +208,7 @@ def classify_tweets_batch(
             model=model,
             max_tokens=100 * len(tweets),  # ~100 tokens per tweet response
             system=system_prompt,
-            messages=[
-                {"role": "user", "content": f"Classify these tweets:\n\n{tweets_text}"}
-            ],
+            messages=[{"role": "user", "content": f"Classify these tweets:\n\n{tweets_text}"}],
         )
 
         first_block = response.content[0]
@@ -231,27 +221,18 @@ def classify_tweets_batch(
         return parse_batch_response(content, expected_ids)
 
     except anthropic.RateLimitError as e:
-        return {
-            t["id"]: {"_error": "rate_limit", "_message": str(e)[:100]}
-            for t in tweets
-        }
+        return {t["id"]: {"_error": "rate_limit", "_message": str(e)[:100]} for t in tweets}
     except anthropic.APIError as e:
-        return {
-            t["id"]: {"_error": "api_error", "_message": str(e)[:200]}
-            for t in tweets
-        }
+        return {t["id"]: {"_error": "api_error", "_message": str(e)[:200]} for t in tweets}
     except Exception as e:
-        return {
-            t["id"]: {"_error": "unexpected_error", "_message": str(e)[:200]}
-            for t in tweets
-        }
+        return {t["id"]: {"_error": "unexpected_error", "_message": str(e)[:200]} for t in tweets}
 
 
 def classify_and_store_batch(
     tweets: list[dict],
     prompt_id: str,
     model: str = DEFAULT_MODEL,
-    client: Optional[anthropic.Anthropic] = None,
+    client: anthropic.Anthropic | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, dict]:
     """

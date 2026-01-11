@@ -327,6 +327,31 @@ def my_func(items: set[str] | None = None):
     items = items or set()
 ```
 
+## Linting and Formatting
+
+The collector uses ruff for linting and code formatting.
+
+```bash
+cd collector
+
+# Check for linting issues
+ruff check .
+
+# Auto-fix linting issues
+ruff check . --fix
+
+# Format code
+ruff format .
+```
+
+Configuration is in `pyproject.toml`. The setup includes:
+- **pycodestyle** (E/W): Style errors and warnings
+- **pyflakes** (F): Unused imports, undefined names
+- **isort** (I): Import sorting
+- **pyupgrade** (UP): Python version upgrades (e.g., `Optional[X]` → `X | None`)
+- **flake8-bugbear** (B): Common bug patterns
+- **flake8-simplify** (SIM): Code simplification suggestions
+
 ## Classifier Usage
 
 The classifier uses Claude to evaluate tweets against prompts stored in the database.
