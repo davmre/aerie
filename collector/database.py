@@ -235,6 +235,18 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             if col_name not in existing_mode_columns:
                 conn.execute(f"ALTER TABLE modes ADD COLUMN {col_name} {col_type}")
 
+        # Migration: Add classification_batch_id to prompt_responses
+        cursor = conn.execute("PRAGMA table_info(prompt_responses)")
+        existing_pr_columns = {row[1] for row in cursor.fetchall()}
+        if "classification_batch_id" not in existing_pr_columns:
+            conn.execute("ALTER TABLE prompt_responses ADD COLUMN classification_batch_id TEXT")
+
+        # Migration: Add classification_batch_id to mode_decisions
+        cursor = conn.execute("PRAGMA table_info(mode_decisions)")
+        existing_md_columns = {row[1] for row in cursor.fetchall()}
+        if "classification_batch_id" not in existing_md_columns:
+            conn.execute("ALTER TABLE mode_decisions ADD COLUMN classification_batch_id TEXT")
+
 
 def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     """
@@ -719,6 +731,7 @@ def store_prompt_response(
     model: str,
     response: dict | Any,
     db_path: Path = DEFAULT_DB_PATH,
+    classification_batch_id: str | None = None,
 ) -> None:
     """Store an LLM response for a tweet/prompt pair."""
     response_json = json.dumps(response) if not isinstance(response, str) else response
@@ -726,10 +739,10 @@ def store_prompt_response(
         conn.execute(
             """
             INSERT OR REPLACE INTO prompt_responses
-            (tweet_id, prompt_id, model, response_json, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            (tweet_id, prompt_id, model, response_json, created_at, classification_batch_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (tweet_id, prompt_id, model, response_json, datetime.utcnow().isoformat()),
+            (tweet_id, prompt_id, model, response_json, datetime.utcnow().isoformat(), classification_batch_id),
         )
 
 
@@ -1706,6 +1719,137 @@ def get_replies_for_tweet(
             "tweet": parent_tweet,
             "replies": replies,
         }
+
+
+def assemble_classification_chains(
+    unclassified_tweets: list[dict],
+    prompt_id: str,
+    model: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """
+    Assemble conversation chains for classification.
+
+    Groups unclassified tweets into thread chains that should be classified together.
+    For each chain, includes context from classified ancestors if present.
+
+    Args:
+        unclassified_tweets: List of tweet dicts without classifications
+        prompt_id: Prompt ID (used to check which tweets are classified)
+        model: Model name (used to check which tweets are classified)
+        db_path: Database path
+
+    Returns:
+        List of chain dicts, each containing:
+        - tweets: List of tweets in the chain (chronological order)
+        - unclassified_ids: Set of tweet IDs that need classification
+    """
+    if not unclassified_tweets:
+        return []
+
+    # Build lookup for quick access
+    tweets_by_id = {t["id"]: t for t in unclassified_tweets}
+    unclassified_ids = set(tweets_by_id.keys())
+
+    # Find thread roots for each unclassified tweet
+    # Root = first unclassified tweet in the chain (or actual root if top-level)
+    roots_map: dict[str, str] = {}  # tweet_id -> root_id
+
+    def find_root(tweet_id: str, visited: set[str] | None = None) -> str:
+        """Find the root of the thread this tweet belongs to."""
+        if visited is None:
+            visited = set()
+
+        if tweet_id in visited:
+            # Circular reference - treat current as root
+            return tweet_id
+
+        if tweet_id in roots_map:
+            return roots_map[tweet_id]
+
+        visited.add(tweet_id)
+
+        tweet = tweets_by_id.get(tweet_id)
+        if not tweet:
+            roots_map[tweet_id] = tweet_id
+            return tweet_id
+
+        # Handle both database format (reply_to_tweet_id) and make_tweet format (reply_to.tweet_id)
+        parent_id = tweet.get("reply_to_tweet_id")
+        if not parent_id and "reply_to" in tweet:
+            parent_id = tweet.get("reply_to", {}).get("tweet_id")
+
+        # If no parent, this is the root
+        if not parent_id:
+            roots_map[tweet_id] = tweet_id
+            return tweet_id
+
+        # If parent is also unclassified, recurse
+        if parent_id in unclassified_ids:
+            root = find_root(parent_id, visited)
+            roots_map[tweet_id] = root
+            return root
+
+        # Parent is classified or not in our set - this tweet is the root
+        roots_map[tweet_id] = tweet_id
+        return tweet_id
+
+    # Group tweets by their root
+    chains_by_root: dict[str, list[str]] = {}
+    for tweet_id in unclassified_ids:
+        root_id = find_root(tweet_id)
+        if root_id not in chains_by_root:
+            chains_by_root[root_id] = []
+        chains_by_root[root_id].append(tweet_id)
+
+    # Build chains with context
+    chains = []
+
+    with transaction(db_path) as conn:
+        for root_id, tweet_ids in chains_by_root.items():
+            # Sort tweets chronologically
+            chain_tweets = [tweets_by_id[tid] for tid in tweet_ids]
+            chain_tweets.sort(key=lambda t: t.get("created_at") or "")
+
+            # Check if we need to fetch classified ancestors for context
+            root_tweet = tweets_by_id[root_id]
+            ancestor_context = []
+
+            # Handle both database format and make_tweet format
+            parent_id = root_tweet.get("reply_to_tweet_id")
+            if not parent_id and "reply_to" in root_tweet:
+                parent_id = root_tweet.get("reply_to", {}).get("tweet_id")
+
+            if parent_id:
+                # This thread has classified ancestors - fetch them for context
+                current_parent_id = parent_id
+                visited = set()
+
+                while current_parent_id and current_parent_id not in visited:
+                    visited.add(current_parent_id)
+
+                    # Fetch parent tweet
+                    parent_row = conn.execute(
+                        "SELECT * FROM tweets WHERE id = ?",
+                        (current_parent_id,)
+                    ).fetchone()
+
+                    if parent_row:
+                        parent_dict = dict(parent_row)
+                        ancestor_context.insert(0, parent_dict)  # Prepend (build oldest-first)
+                        current_parent_id = parent_dict.get("reply_to_tweet_id")
+                    else:
+                        break
+
+            # Combine ancestors + unclassified tweets
+            full_chain = ancestor_context + chain_tweets
+
+            chains.append({
+                "tweets": full_chain,
+                "unclassified_ids": set(tweet_ids),
+            })
+
+    return chains
 
 
 if __name__ == "__main__":
