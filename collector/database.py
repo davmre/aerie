@@ -69,6 +69,10 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 created_at TEXT,
                 captured_at TEXT NOT NULL,
 
+                -- Platform identification
+                platform TEXT DEFAULT 'twitter',
+                platform_metadata TEXT,
+
                 -- Author info (denormalized for simplicity)
                 author_id TEXT,
                 author_username TEXT,
@@ -114,6 +118,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_tweets_author ON tweets(author_username);
             CREATE INDEX IF NOT EXISTS idx_tweets_reply_to ON tweets(reply_to_tweet_id);
             CREATE INDEX IF NOT EXISTS idx_tweets_quoted_tweet_id ON tweets(quoted_tweet_id);
+            CREATE INDEX IF NOT EXISTS idx_tweets_platform ON tweets(platform);
 
             -- Track capture sessions for debugging/analytics
             CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -177,6 +182,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
                 retweeter_display_name TEXT,
                 retweeted_at TEXT NOT NULL,
                 captured_at TEXT NOT NULL,
+                platform TEXT DEFAULT 'twitter',
                 PRIMARY KEY (original_tweet_id, retweeter_username),
                 FOREIGN KEY (original_tweet_id) REFERENCES tweets(id)
             );
@@ -216,6 +222,8 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             ("author_following", "INTEGER"),
             ("author_followers_count", "INTEGER"),
             ("is_promoted", "INTEGER DEFAULT 0"),
+            ("platform", "TEXT DEFAULT 'twitter'"),
+            ("platform_metadata", "TEXT"),
         ]
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
@@ -247,6 +255,13 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
         if "classification_batch_id" not in existing_md_columns:
             conn.execute("ALTER TABLE mode_decisions ADD COLUMN classification_batch_id TEXT")
 
+        # Migration: Add platform column to retweets table if it doesn't exist
+        cursor = conn.execute("PRAGMA table_info(retweets)")
+        existing_retweet_columns = {row[1] for row in cursor.fetchall()}
+
+        if "platform" not in existing_retweet_columns:
+            conn.execute("ALTER TABLE retweets ADD COLUMN platform TEXT DEFAULT 'twitter'")
+
 
 def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     """
@@ -264,19 +279,28 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
             try:
                 author = tweet.get("author", {})
                 text = tweet["text"]
+                # Extract platform-specific data
+                platform = tweet.get("platform", "twitter")
+                platform_metadata = tweet.get("platform_metadata")
+                if platform_metadata and not isinstance(platform_metadata, str):
+                    platform_metadata = json.dumps(platform_metadata)
+
                 result = conn.execute(
                     """
                     INSERT INTO tweets (
                         id, text, created_at, captured_at,
+                        platform, platform_metadata,
                         author_id, author_username, author_display_name, author_verified,
                         author_blue_verified, author_bio, author_following, author_followers_count,
                         retweet_count, reply_count, like_count, quote_count,
                         reply_to_tweet_id, reply_to_user_id, reply_to_username,
                         is_retweet, is_quote, is_promoted, quoted_tweet_id,
                         media_json, urls_json, hashtags_json, mentions_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         text = CASE WHEN length(excluded.text) > length(tweets.text) THEN excluded.text ELSE tweets.text END,
+                        platform = COALESCE(excluded.platform, tweets.platform),
+                        platform_metadata = COALESCE(excluded.platform_metadata, tweets.platform_metadata),
                         author_username = COALESCE(excluded.author_username, tweets.author_username),
                         author_display_name = COALESCE(excluded.author_display_name, tweets.author_display_name),
                         author_bio = COALESCE(excluded.author_bio, tweets.author_bio),
@@ -289,6 +313,8 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         text,
                         parse_twitter_date(tweet.get("created_at")),
                         tweet.get("captured_at", datetime.utcnow().isoformat()),
+                        platform,
+                        platform_metadata,
                         author.get("id"),
                         author.get("username"),
                         author.get("display_name"),
@@ -355,8 +381,8 @@ def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dic
                     """
                     INSERT INTO retweets (
                         original_tweet_id, retweeter_user_id, retweeter_username,
-                        retweeter_display_name, retweeted_at, captured_at
-                    ) VALUES (?, ?, ?, ?, ?, ?)
+                        retweeter_display_name, retweeted_at, captured_at, platform
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(original_tweet_id, retweeter_username) DO NOTHING
                 """,
                     (
@@ -366,6 +392,7 @@ def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dic
                         rt.get("retweeter_display_name"),
                         parse_twitter_date(rt.get("retweeted_at")),
                         rt.get("captured_at", datetime.utcnow().isoformat()),
+                        rt.get("platform", "twitter"),
                     ),
                 )
                 inserted += 1
@@ -1033,20 +1060,42 @@ def get_mode_decisions_batch(
 
 def get_cached_decision_stats(
     mode_id: str,
+    platform: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict:
-    """Get stats from cached decisions for a mode."""
+    """Get stats from cached decisions for a mode, optionally filtered by platform."""
     with transaction(db_path) as conn:
-        total = conn.execute("SELECT COUNT(*) FROM tweets").fetchone()[0]
+        # Build platform filter
+        platform_clause = ""
+        platform_params = []
+        if platform:
+            platform_clause = "WHERE platform = ?"
+            platform_params = [platform]
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM tweets {platform_clause}",
+            platform_params,
+        ).fetchone()[0]
+
+        # Build join query with platform filter
+        join_platform_clause = ""
+        if platform:
+            join_platform_clause = "JOIN tweets t ON md.tweet_id = t.id WHERE t.platform = ? AND"
+            approved_params = [platform, mode_id]
+            filtered_params = [platform, mode_id]
+        else:
+            join_platform_clause = "WHERE"
+            approved_params = [mode_id]
+            filtered_params = [mode_id]
 
         approved = conn.execute(
-            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ? AND decision = 'approved'",
-            (mode_id,),
+            f"SELECT COUNT(*) FROM mode_decisions md {join_platform_clause} md.mode_id = ? AND md.decision = 'approved'",
+            approved_params,
         ).fetchone()[0]
 
         filtered = conn.execute(
-            "SELECT COUNT(*) FROM mode_decisions WHERE mode_id = ? AND decision = 'filtered'",
-            (mode_id,),
+            f"SELECT COUNT(*) FROM mode_decisions md {join_platform_clause} md.mode_id = ? AND md.decision = 'filtered'",
+            filtered_params,
         ).fetchone()[0]
 
         pending = total - approved - filtered
@@ -1119,6 +1168,15 @@ def get_all_tweet_ids(db_path: Path = DEFAULT_DB_PATH) -> list[str]:
     with transaction(db_path) as conn:
         rows = conn.execute("SELECT id FROM tweets").fetchall()
         return [row["id"] for row in rows]
+
+
+def get_platform_stats(db_path: Path = DEFAULT_DB_PATH) -> dict[str, int]:
+    """Get tweet counts by platform."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            "SELECT platform, COUNT(*) as count FROM tweets GROUP BY platform"
+        ).fetchall()
+        return {row["platform"]: row["count"] for row in rows}
 
 
 # =============================================================================
@@ -1281,6 +1339,7 @@ def get_conversation_roots(
     sort_field: str = "created_at",
     limit: int = 20,
     offset: int = 0,
+    platform: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> tuple[list[dict], int]:
     """
@@ -1295,6 +1354,7 @@ def get_conversation_roots(
         sort_field: Field to sort by (created_at or captured_at)
         limit: Number of roots to return
         offset: Pagination offset
+        platform: Optional platform filter ('twitter', 'bluesky', or None for all)
         db_path: Database path
 
     Returns:
@@ -1304,13 +1364,21 @@ def get_conversation_roots(
     if sort_field not in ("created_at", "captured_at"):
         sort_field = "created_at"
 
+    # Build platform filter clause
+    platform_clause = ""
+    platform_params = []
+    if platform:
+        platform_clause = "AND t.platform = ?"
+        platform_params = [platform]
+
     with transaction(db_path) as conn:
         # Count total roots first
         count_row = conn.execute(
-            """
+            f"""
             SELECT COUNT(*) as cnt FROM tweets t
             JOIN mode_decisions md ON t.id = md.tweet_id
             WHERE md.mode_id = ? AND md.decision = 'approved'
+              {platform_clause}
               AND (
                   t.reply_to_tweet_id IS NULL
                   OR NOT EXISTS (
@@ -1321,7 +1389,7 @@ def get_conversation_roots(
                   )
               )
             """,
-            (mode_id, mode_id),
+            (mode_id, *platform_params, mode_id),
         ).fetchone()
         total = count_row["cnt"]
 
@@ -1331,6 +1399,7 @@ def get_conversation_roots(
             SELECT t.* FROM tweets t
             JOIN mode_decisions md ON t.id = md.tweet_id
             WHERE md.mode_id = ? AND md.decision = 'approved'
+              {platform_clause}
               AND (
                   t.reply_to_tweet_id IS NULL
                   OR NOT EXISTS (
@@ -1343,7 +1412,7 @@ def get_conversation_roots(
             ORDER BY t.{sort_field} DESC
             LIMIT ? OFFSET ?
             """,
-            (mode_id, mode_id, limit, offset),
+            (mode_id, *platform_params, mode_id, limit, offset),
         ).fetchall()
 
         return [dict(row) for row in rows], total
