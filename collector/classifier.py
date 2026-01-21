@@ -139,7 +139,16 @@ def format_tweet_for_classification(tweet: dict) -> str:
     if tweet.get("is_retweet"):
         parts.append("[This is a retweet]")
     if tweet.get("is_quote"):
-        parts.append("[This is a quote tweet]")
+        quoted = tweet.get("quoted_tweet")
+        if quoted:
+            quoted_author = quoted.get("author_username") or "unknown"
+            quoted_text = quoted.get("text", "")
+            # Truncate very long quoted tweets
+            if len(quoted_text) > 500:
+                quoted_text = quoted_text[:500] + "..."
+            parts.append(f"[Quoting @{quoted_author}: \"{quoted_text}\"]")
+        else:
+            parts.append("[This is a quote tweet]")
     if tweet.get("reply_to_username"):
         parts.append(f"[Replying to @{tweet['reply_to_username']}]")
 

@@ -1844,6 +1844,25 @@ def assemble_classification_chains(
             # Combine ancestors + unclassified tweets
             full_chain = ancestor_context + chain_tweets
 
+            # Enrich tweets with quoted tweet content
+            quoted_ids = [
+                t.get("quoted_tweet_id")
+                for t in full_chain
+                if t.get("quoted_tweet_id")
+            ]
+            if quoted_ids:
+                placeholders = ",".join("?" * len(quoted_ids))
+                quoted_rows = conn.execute(
+                    f"SELECT * FROM tweets WHERE id IN ({placeholders})",
+                    quoted_ids
+                ).fetchall()
+                quoted_by_id = {row["id"]: dict(row) for row in quoted_rows}
+
+                for tweet in full_chain:
+                    qid = tweet.get("quoted_tweet_id")
+                    if qid and qid in quoted_by_id:
+                        tweet["quoted_tweet"] = quoted_by_id[qid]
+
             chains.append({
                 "tweets": full_chain,
                 "unclassified_ids": set(tweet_ids),
