@@ -1,0 +1,4 @@
+- remove mouseover approval messages in read view (distracting to have them appear and disappear)
+- send full context when classifying a tweet (including quote tweet, replies, etc)
+- classify conversation units, not tweets. ensures we have full context, and that we don't do weird stuff like allow a tweet but not the tweet its quoting (or vice versa)
+- 
