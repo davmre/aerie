@@ -8,10 +8,12 @@ Responses are cached in prompt_responses for use by mode extractors.
 
 import argparse
 import json
+import uuid
 from pathlib import Path
 
 from database import (
     DEFAULT_DB_PATH,
+    assemble_classification_chains,
     create_mode,
     create_prompt,
     get_prompt,
@@ -31,16 +33,18 @@ from providers import get_default_provider, get_provider, list_providers
 
 BUILTIN_PROMPTS = {
     "binary_filter_v1": {
-        "prompt_text": """You are a tweet filter assistant. Determine if this tweet should be shown to the user.
+        "prompt_text": """You are a tweet filter assistant. Determine if this content should be shown to the user.
 
-SHOW tweets that are:
+You may receive either a single tweet or a conversation thread. If it's a thread, evaluate the overall value of the conversation - your decision will apply to all tweets in the thread.
+
+SHOW content that is:
 - Informative, educational, or genuinely interesting
 - Positive or constructive discussions
 - Creative content, humor, or entertainment
 - Professional updates or industry news
 - Personal updates that aren't negative
 
-HIDE tweets that are:
+HIDE content that is:
 - Ragebait or content designed to provoke outrage
 - Doomposting or excessively negative content
 - Political flamewars or tribal arguments
@@ -54,7 +58,9 @@ Respond with ONLY a JSON object:
         "response_schema": '{"approved": "boolean", "reason": "string"}',
     },
     "topic_tagger_v1": {
-        "prompt_text": """Analyze this tweet and extract topics and quality scores.
+        "prompt_text": """Analyze this content and extract topics and quality scores.
+
+You may receive either a single tweet or a conversation thread. If it's a thread, evaluate the overall conversation.
 
 Topics (select all that apply):
 - ml: machine learning, AI, deep learning, neural networks
@@ -133,7 +139,16 @@ def format_tweet_for_classification(tweet: dict) -> str:
     if tweet.get("is_retweet"):
         parts.append("[This is a retweet]")
     if tweet.get("is_quote"):
-        parts.append("[This is a quote tweet]")
+        quoted = tweet.get("quoted_tweet")
+        if quoted:
+            quoted_author = quoted.get("author_username") or "unknown"
+            quoted_text = quoted.get("text", "")
+            # Truncate very long quoted tweets
+            if len(quoted_text) > 500:
+                quoted_text = quoted_text[:500] + "..."
+            parts.append(f"[Quoting @{quoted_author}: \"{quoted_text}\"]")
+        else:
+            parts.append("[This is a quote tweet]")
     if tweet.get("reply_to_username"):
         parts.append(f"[Replying to @{tweet['reply_to_username']}]")
 
@@ -151,34 +166,67 @@ def format_tweet_for_classification(tweet: dict) -> str:
     return "\n".join(parts)
 
 
+def format_chain_for_classification(tweets: list[dict]) -> str:
+    """
+    Format a conversation chain for LLM classification.
+
+    Args:
+        tweets: List of tweets in chronological order (oldest first)
+
+    Returns:
+        Formatted string showing the conversation thread
+    """
+    if not tweets:
+        return ""
+
+    if len(tweets) == 1:
+        # Single tweet - use simpler format
+        return format_tweet_for_classification(tweets[0])
+
+    # Multiple tweets - format as conversation
+    parts = ["CONVERSATION THREAD:", ""]
+
+    for i, tweet in enumerate(tweets, 1):
+        # Tweet number and author
+        author = tweet.get("author_username") or "unknown"
+        display_name = tweet.get("author_display_name") or author
+        verified = " [verified]" if tweet.get("author_verified") else ""
+
+        # Determine context (reply relationship)
+        context = ""
+        if i > 1:
+            prev_author = tweets[i-2].get("author_username") or "unknown"
+            if tweet.get("reply_to_username") == prev_author:
+                context = f" (replying to @{prev_author})"
+            elif tweet.get("reply_to_username"):
+                context = f" (replying to @{tweet['reply_to_username']})"
+
+        parts.append(f"Tweet {i}{context}:")
+        parts.append(f"@{author} ({display_name}){verified}")
+
+        # Tweet text
+        parts.append(tweet.get("text", ""))
+
+        # Engagement metrics
+        metrics = []
+        if tweet.get("like_count", 0) > 0:
+            metrics.append(f"{tweet['like_count']} likes")
+        if tweet.get("retweet_count", 0) > 0:
+            metrics.append(f"{tweet['retweet_count']} retweets")
+        if tweet.get("reply_count", 0) > 0:
+            metrics.append(f"{tweet['reply_count']} replies")
+        if metrics:
+            parts.append(f"[{', '.join(metrics)}]")
+
+        # Add blank line between tweets
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 # =============================================================================
 # Classification
 # =============================================================================
-
-
-def call_llm(
-    tweet: dict,
-    system_prompt: str,
-    provider_name: str = "anthropic",
-    model: str | None = None,
-) -> dict:
-    """
-    Call the LLM and return the parsed JSON response.
-    Returns the parsed response dict, or an error dict if parsing fails.
-
-    Args:
-        tweet: Tweet dict with text, author info, etc.
-        system_prompt: The classification prompt.
-        provider_name: LLM provider to use ("anthropic", "gemini", etc.)
-        model: Model to use (defaults to provider's default).
-    """
-    tweet_text = format_tweet_for_classification(tweet)
-
-    try:
-        provider = get_provider(provider_name)
-        return provider.classify(tweet_text, system_prompt, model)
-    except ValueError as e:
-        return {"_error": "provider_error", "_message": str(e)[:200]}
 
 
 def run_classification(
@@ -264,61 +312,133 @@ def run_classification(
 
     print()
 
-    # Process in batches
+    # Get all unclassified tweets
+    tweets = get_tweets_without_response(prompt_id, actual_model, limit=limit, db_path=db_path)
+
+    if not tweets:
+        print("No tweets to classify.")
+        return
+
+    print(f"Step 1: Checking for tweets that can inherit classifications...")
+
+    # First pass: Apply inheritance logic
+    # Tweets that reply to classified tweets inherit their parent's classification
+    inherited_count = 0
+    tweets_needing_llm = []
+
+    for tweet in tweets:
+        parent_id = tweet.get("reply_to_tweet_id")
+        if parent_id:
+            # Check if parent has a classification for this prompt+model
+            from database import get_prompt_response
+            parent_response = get_prompt_response(parent_id, prompt_id, actual_model, db_path)
+
+            if parent_response:
+                # Inherit parent's classification
+                if verbose:
+                    print(f"  Tweet {tweet['id'][:10]}... inherits from parent {parent_id[:10]}...")
+
+                if not dry_run:
+                    # Copy parent's response with reference to parent's batch_id
+                    parent_batch_id = parent_response.get("classification_batch_id")
+                    store_prompt_response(
+                        tweet["id"],
+                        prompt_id,
+                        actual_model,
+                        parent_response.get("response_json", parent_response),
+                        db_path,
+                        classification_batch_id=parent_batch_id,  # Inherit batch_id
+                    )
+
+                inherited_count += 1
+                continue
+
+        # No parent or parent not classified - needs LLM
+        tweets_needing_llm.append(tweet)
+
+    print(f"  {inherited_count} tweets inherited parent classifications")
+    print(f"  {len(tweets_needing_llm)} tweets need LLM classification")
+    print()
+
+    if not tweets_needing_llm:
+        print("All tweets resolved via inheritance. No LLM calls needed.")
+        return
+
+    # Second pass: Assemble chains and classify
+    print(f"Step 2: Assembling conversation chains...")
+    chains = assemble_classification_chains(tweets_needing_llm, prompt_id, actual_model, db_path)
+    print(f"  Assembled {len(chains)} conversation chains")
+    print()
+
+    # Process chains
+    print(f"Step 3: Classifying conversation chains...")
     processed = 0
     success_count = 0
     error_count = 0
 
-    while processed < limit:
-        # Fetch next batch
-        remaining = limit - processed
-        fetch_count = min(batch_size, remaining)
-        tweets = get_tweets_without_response(prompt_id, actual_model, fetch_count, db_path)
+    for chain_idx, chain in enumerate(chains, 1):
+        chain_tweets = chain["tweets"]
+        unclassified_ids = chain["unclassified_ids"]
 
-        if not tweets:
-            break
-
-        print(f"Batch {processed // batch_size + 1}: classifying {len(tweets)} tweets...")
-
-        for i, tweet in enumerate(tweets):
-            tweet_id = tweet["id"]
-
-            if verbose:
+        if verbose:
+            print(f"  Chain {chain_idx}/{len(chains)}: {len(chain_tweets)} tweets ({len(unclassified_ids)} unclassified)")
+            for tweet in chain_tweets:
                 author = tweet.get("author_username", "unknown")
-                text_preview = (
-                    (tweet.get("text", "")[:50] + "...")
-                    if len(tweet.get("text", "")) > 50
-                    else tweet.get("text", "")
-                )
-                print(f"  [{processed + i + 1}/{limit}] @{author}: {text_preview}")
+                text_preview = (tweet.get("text", "")[:40] + "...") if len(tweet.get("text", "")) > 40 else tweet.get("text", "")
+                classified_marker = "" if tweet["id"] in unclassified_ids else "[context] "
+                print(f"    {classified_marker}@{author}: {text_preview}")
 
-            # Call LLM
-            response = call_llm(tweet, system_prompt, provider_name, actual_model)
+        # Format chain for LLM
+        chain_text = format_chain_for_classification(chain_tweets)
 
-            if verbose:
-                if "_error" in response:
-                    print(f"    -> ERROR: {response.get('_error')}")
-                else:
-                    print(f"    -> {json.dumps(response)[:80]}...")
+        # Call LLM once for entire chain
+        try:
+            provider = get_provider(provider_name)
+            response = provider.classify(chain_text, system_prompt, actual_model)
+        except ValueError as e:
+            response = {"_error": "provider_error", "_message": str(e)[:200]}
 
-            # Store response
-            if not dry_run:
-                store_prompt_response(tweet_id, prompt_id, actual_model, response, db_path)
-
+        if verbose:
             if "_error" in response:
-                error_count += 1
+                print(f"    -> ERROR: {response.get('_error')}")
             else:
-                success_count += 1
+                print(f"    -> {json.dumps(response)[:80]}...")
 
-        processed += len(tweets)
-        print(f"  Batch complete: {success_count} successful, {error_count} errors")
-        print()
+        # Generate batch ID for this chain
+        batch_id = str(uuid.uuid4())
+
+        # Store response for all unclassified tweets in chain
+        if not dry_run:
+            for tweet_id in unclassified_ids:
+                store_prompt_response(
+                    tweet_id,
+                    prompt_id,
+                    actual_model,
+                    response,
+                    db_path,
+                    classification_batch_id=batch_id,
+                )
+
+        # Update counts
+        processed += len(unclassified_ids)
+        if "_error" in response:
+            error_count += len(unclassified_ids)
+        else:
+            success_count += len(unclassified_ids)
+
+        if not verbose:
+            print(f"  Processed {processed}/{len(tweets_needing_llm)} tweets ({len(chains) - chain_idx} chains remaining)...")
+
+    print()
+    print(f"  Chain classification complete: {success_count} successful, {error_count} errors")
+    print()
 
     # Final stats
     print("=" * 40)
     print("Classification complete!")
-    print(f"  Processed: {processed}")
-    print(f"  Successful: {success_count}")
+    print(f"  Total processed: {processed + inherited_count}")
+    print(f"  Inherited from parent: {inherited_count}")
+    print(f"  LLM classified: {success_count}")
     print(f"  Errors: {error_count}")
 
     # Update cached mode decisions

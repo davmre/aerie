@@ -241,7 +241,7 @@ class AnthropicProvider(LLMProvider):
             client = self._get_client()
             response = client.messages.create(
                 model=self.get_model(model),
-                max_tokens=200,
+                max_tokens=500,  # Increased for thread classification
                 system=system_prompt,
                 messages=[{"role": "user", "content": f"Analyze this tweet:\n\n{tweet_text}"}],
             )
@@ -357,7 +357,7 @@ class GeminiProvider(LLMProvider):
                 contents=f"Analyze this tweet:\n\n{tweet_text}",
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    max_output_tokens=200,
+                    max_output_tokens=500,  # Increased for thread classification
                 ),
             )
 
