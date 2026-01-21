@@ -15,7 +15,7 @@ from flask import Flask, current_app, jsonify, render_template, request
 
 from batch_classifier import classify_and_store_batch
 from classification_queue import Priority, get_classification_queue
-from classifier import format_chain_for_classification, format_tweet_for_classification, setup_prompts_and_modes
+from classifier import format_chain_for_classification, setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,

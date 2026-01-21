@@ -220,31 +220,6 @@ def format_chain_for_classification(tweets: list[dict]) -> str:
 # =============================================================================
 
 
-def call_llm(
-    tweet: dict,
-    system_prompt: str,
-    provider_name: str = "anthropic",
-    model: str | None = None,
-) -> dict:
-    """
-    Call the LLM and return the parsed JSON response.
-    Returns the parsed response dict, or an error dict if parsing fails.
-
-    Args:
-        tweet: Tweet dict with text, author info, etc.
-        system_prompt: The classification prompt.
-        provider_name: LLM provider to use ("anthropic", "gemini", etc.)
-        model: Model to use (defaults to provider's default).
-    """
-    tweet_text = format_tweet_for_classification(tweet)
-
-    try:
-        provider = get_provider(provider_name)
-        return provider.classify(tweet_text, system_prompt, model)
-    except ValueError as e:
-        return {"_error": "provider_error", "_message": str(e)[:200]}
-
-
 def run_classification(
     prompt_id: str,
     provider_name: str | None = None,
