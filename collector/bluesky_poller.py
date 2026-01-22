@@ -166,6 +166,30 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
                     if quoted_value.reply.root:
                         quoted_root_uri = quoted_value.reply.root.uri
 
+                # Extract URLs from quoted post facets
+                quoted_urls = []
+                if hasattr(quoted_value, "facets") and quoted_value.facets:
+                    quoted_text_bytes = quoted_value.text.encode("utf-8")
+                    for facet in quoted_value.facets:
+                        features = getattr(facet, "features", []) or []
+                        for feature in features:
+                            feature_type = getattr(feature, "py_type", None) or getattr(feature, "$type", "")
+                            if "link" in str(feature_type).lower():
+                                uri = getattr(feature, "uri", None)
+                                if uri:
+                                    index = getattr(facet, "index", None)
+                                    if index:
+                                        byte_start = getattr(index, "byte_start", 0)
+                                        byte_end = getattr(index, "byte_end", len(quoted_text_bytes))
+                                        display_text = quoted_text_bytes[byte_start:byte_end].decode("utf-8", errors="replace")
+                                    else:
+                                        display_text = uri
+                                    quoted_urls.append({
+                                        "url": display_text,
+                                        "expanded_url": uri,
+                                        "display_url": display_text,
+                                    })
+
                 # Build platform metadata for quoted post
                 quoted_cid = getattr(quoted_record, "cid", None)
                 quoted_platform_metadata = {
@@ -201,7 +225,35 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
                     "is_quote": False,
                     "quoted_tweet_id": None,
                     "media": [],  # Media extraction for quoted posts is complex, skip for now
+                    "urls": quoted_urls,
                 }
+
+    # Extract URL facets (Bluesky's way of annotating links in text)
+    urls = []
+    if hasattr(record, "facets") and record.facets:
+        text_bytes = record.text.encode("utf-8")
+        for facet in record.facets:
+            # Check if this facet is a link
+            features = getattr(facet, "features", []) or []
+            for feature in features:
+                feature_type = getattr(feature, "py_type", None) or getattr(feature, "$type", "")
+                if "link" in str(feature_type).lower():
+                    uri = getattr(feature, "uri", None)
+                    if uri:
+                        # Extract the display text using byte offsets
+                        index = getattr(facet, "index", None)
+                        if index:
+                            byte_start = getattr(index, "byte_start", 0)
+                            byte_end = getattr(index, "byte_end", len(text_bytes))
+                            display_text = text_bytes[byte_start:byte_end].decode("utf-8", errors="replace")
+                        else:
+                            display_text = uri
+
+                        urls.append({
+                            "url": display_text,  # The truncated URL shown in text
+                            "expanded_url": uri,  # The actual full URL
+                            "display_url": display_text,
+                        })
 
     # Extract engagement metrics
     like_count = getattr(post, "like_count", 0) or 0
@@ -269,6 +321,7 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
         "is_quote": is_quote,
         "quoted_tweet_id": quoted_post_id,
         "media": media,
+        "urls": urls,
     }
 
     # Build repost record if this is a repost
