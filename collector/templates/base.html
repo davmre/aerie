@@ -445,6 +445,27 @@
             color: var(--accent-human-text);
         }
 
+        /* Platform badges */
+        .platform-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            margin-left: 6px;
+        }
+
+        .platform-twitter {
+            background: rgba(29, 161, 242, 0.15);
+            color: #1da1f2;
+        }
+
+        .platform-bluesky {
+            background: rgba(0, 133, 255, 0.15);
+            color: #0085ff;
+        }
+
         /* Buttons */
         .btn {
             padding: 6px 12px;
@@ -723,6 +744,54 @@
             }
         }
 
+        /**
+         * Get platform info from a tweet's id and platform field.
+         * Returns { platform: 'twitter'|'bluesky', url: string }
+         */
+        function getPlatformInfo(tweetId, platform, authorUsername) {
+            // Determine platform from prefix or platform field
+            let detectedPlatform = platform || 'twitter';
+            if (tweetId && tweetId.startsWith('bsky:')) {
+                detectedPlatform = 'bluesky';
+            } else if (tweetId && tweetId.startsWith('twitter:')) {
+                detectedPlatform = 'twitter';
+            }
+
+            let url;
+            if (detectedPlatform === 'bluesky') {
+                // Extract the AT URI from the id (format: bsky:at://did/collection/rkey)
+                const atUri = tweetId.replace(/^bsky:/, '');
+                // Parse: at://did:plc:xxx/app.bsky.feed.post/rkey
+                const match = atUri.match(/at:\/\/([^/]+)\/[^/]+\/([^/]+)/);
+                if (match && authorUsername) {
+                    const rkey = match[2];
+                    url = `https://bsky.app/profile/${authorUsername}/post/${rkey}`;
+                } else {
+                    // Fallback if parsing fails
+                    url = 'https://bsky.app';
+                }
+            } else {
+                // Twitter URL
+                const rawId = tweetId ? tweetId.replace(/^twitter:/, '') : tweetId;
+                if (authorUsername) {
+                    url = `https://twitter.com/${authorUsername}/status/${rawId}`;
+                } else {
+                    url = `https://twitter.com/i/status/${rawId}`;
+                }
+            }
+
+            return { platform: detectedPlatform, url };
+        }
+
+        /**
+         * Render a platform badge.
+         */
+        function renderPlatformBadge(platform) {
+            const p = platform || 'twitter';
+            const label = p === 'bluesky' ? 'bsky' : 'X';
+            return `<span class="platform-badge platform-${p}">${label}</span>`;
+        }
+
         // Check if a URL points to Twitter media (photo/video)
         function isMediaUrl(url) {
             if (!url) return false;
@@ -849,14 +918,13 @@
 
         function renderQuotedTweet(qt) {
             if (!qt) return '';
-            const qtUrl = qt.author_username
-                ? `https://twitter.com/${qt.author_username}/status/${qt.id}`
-                : `https://twitter.com/i/status/${qt.id}`;
+            const { platform, url: qtUrl } = getPlatformInfo(qt.id, qt.platform, qt.author_username);
             return `
                 <div class="quoted-tweet" onclick="event.stopPropagation()">
                     <div class="quoted-tweet-header">
                         <span class="tweet-author">${escapeHtml(qt.author_display_name || qt.author_username || 'Unknown')}</span>
                         <span class="tweet-username">@${escapeHtml(qt.author_username || 'unknown')}</span>
+                        ${renderPlatformBadge(platform)}
                         <a href="${qtUrl}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                     </div>
                     <div class="quoted-tweet-text">${renderCollapsibleText(qt.text || '', TEXT_LIMIT_CONTEXT, true, qt.urls_json, qt.media_json)}</div>
@@ -871,14 +939,13 @@
                 <div class="thread-context" onclick="event.stopPropagation()">
                     <div class="thread-label">🧵 Thread context (${ancestors.length} earlier ${ancestors.length === 1 ? 'post' : 'posts'})</div>
                     ${ancestors.map(a => {
-                        const url = a.author_username
-                            ? `https://twitter.com/${a.author_username}/status/${a.id}`
-                            : `https://twitter.com/i/status/${a.id}`;
+                        const { platform, url } = getPlatformInfo(a.id, a.platform, a.author_username);
                         return `
                             <div class="thread-ancestor">
                                 <div class="thread-ancestor-header">
                                     <span class="tweet-author">${escapeHtml(a.author_display_name || a.author_username || 'Unknown')}</span>
                                     <span class="tweet-username">@${escapeHtml(a.author_username || 'unknown')}</span>
+                                    ${renderPlatformBadge(platform)}
                                     <a href="${url}" target="_blank" rel="noopener" class="tweet-link">↗</a>
                                 </div>
                                 <div class="thread-ancestor-text">${renderCollapsibleText(a.text || '', TEXT_LIMIT_CONTEXT, true, a.urls_json, a.media_json)}</div>

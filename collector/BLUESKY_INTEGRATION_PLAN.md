@@ -124,16 +124,24 @@ python bluesky_poller.py -v           # Verbose output
 | `quoted_tweet_id` | `embed.record.uri` |
 | `reply_to_tweet_id` | `record.reply.parent.uri` |
 
-### Phase 3: Web UI Updates
+### Phase 3: Web UI Updates ✅ COMPLETED
 
-Update the UI to display platform context and allow filtering.
+**Status**: Done
 
-**Tasks**:
-1. Add platform badges to Read and Label pages
-2. Add platform filter dropdown (All / Twitter / Bluesky)
-3. Update stats display to show per-platform counts
-4. Add "Open original" links that work for both platforms
-5. Handle platform-specific display (e.g., Bluesky content labels)
+Updated the UI to display platform context and allow filtering.
+
+**Changes made**:
+- Added platform badges (X/bsky) to Read and Label pages
+- Added platform filter dropdown (All / Twitter/X / Bluesky) to both pages
+- Updated stats display to show per-platform counts
+- Made "Open original" links platform-aware (Twitter vs Bluesky URLs)
+- Added platform-aware URL generation for quoted tweets and thread context
+
+**Files modified**:
+- `collector/templates/base.html` - Platform badge CSS, URL helper functions
+- `collector/templates/read.html` - Platform badges, filter dropdown
+- `collector/templates/label.html` - Platform badges, filter dropdown
+- `collector/server.py` - Platform filter in API endpoints, platform stats
 
 ### Phase 4: Polish & Settings
 
@@ -188,10 +196,11 @@ Final touches and configuration.
 - `collector/bluesky_auth.py` - Authentication handling (optional)
 - `pyproject.toml` - Add `atproto` dependency
 
-### Phase 3 (Planned)
-- `collector/templates/read.html` - Platform badges, filtering
-- `collector/templates/label.html` - Platform badges
-- `collector/server.py` - Platform filter endpoints
+### Phase 3 (Completed)
+- `collector/templates/base.html` - Platform badge CSS, getPlatformInfo() helper
+- `collector/templates/read.html` - Platform badges, filter dropdown, platform-aware URLs
+- `collector/templates/label.html` - Platform badges, filter dropdown, platform-aware URLs
+- `collector/server.py` - Platform filter in /api/ui/tweets and /api/ui/chains, platform stats in /stats
 
 ### Phase 4 (Planned)
 - `collector/templates/settings.html` - Bluesky auth settings (new)

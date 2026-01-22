@@ -293,6 +293,13 @@
         {% endfor %}
     </select>
 
+    <label>Platform:</label>
+    <select id="platform-select">
+        <option value="all">All</option>
+        <option value="twitter">Twitter/X</option>
+        <option value="bluesky">Bluesky</option>
+    </select>
+
     <label>Sort:</label>
     <select id="sort-select">
         <option value="created_at">Tweet date</option>
@@ -336,6 +343,7 @@ let modalHistory = [];
 
 const container = document.getElementById('chains-container');
 const modeSelect = document.getElementById('mode-select');
+const platformSelect = document.getElementById('platform-select');
 const sortSelect = document.getElementById('sort-select');
 const loadMoreDiv = document.getElementById('load-more');
 const statsDiv = document.getElementById('mode-stats');
@@ -349,7 +357,14 @@ async function updateStats(mode) {
         statsDiv.textContent = '';
         return;
     }
-    statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+    let platformInfo = '';
+    if (stats.platforms) {
+        const parts = [];
+        if (stats.platforms.twitter) parts.push(`${stats.platforms.twitter} X`);
+        if (stats.platforms.bluesky) parts.push(`${stats.platforms.bluesky} Bluesky`);
+        if (parts.length > 0) platformInfo = ` (${parts.join(', ')})`;
+    }
+    statsDiv.textContent = `${stats.total} tweets${platformInfo} | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
 }
 
 async function loadChains(append = false) {
@@ -368,6 +383,11 @@ async function loadChains(append = false) {
             limit: PAGE_SIZE,
             offset: offset
         });
+
+        // Add platform filter if not "all"
+        if (platformSelect.value !== 'all') {
+            params.set('platform', platformSelect.value);
+        }
 
         const response = await fetch(`/api/ui/chains?${params}`);
         const data = await response.json();
@@ -433,9 +453,7 @@ function renderChain(chainData) {
 function renderChainTweet(tweet, hiddenReplyCount) {
     const response = tweet.responses?.[0];
     const reason = response?.response?.reason || '';
-    const tweetUrl = tweet.author_username
-        ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
-        : `https://twitter.com/i/status/${tweet.id}`;
+    const { platform, url: tweetUrl } = getPlatformInfo(tweet.id, tweet.platform, tweet.author_username);
 
     return `
         <div class="chain-tweet">
@@ -443,6 +461,7 @@ function renderChainTweet(tweet, hiddenReplyCount) {
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
                     <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                    ${renderPlatformBadge(platform)}
                 </div>
                 <div class="tweet-meta">
                     <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
@@ -505,9 +524,7 @@ async function loadRepliesIntoModal(tweetId) {
 
         // Parent tweet for context
         const tweet = data.tweet;
-        const tweetUrl = tweet.author_username
-            ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
-            : `https://twitter.com/i/status/${tweet.id}`;
+        const { platform: tweetPlatform, url: tweetUrl } = getPlatformInfo(tweet.id, tweet.platform, tweet.author_username);
 
         html += `
             <div class="modal-parent-tweet">
@@ -515,6 +532,7 @@ async function loadRepliesIntoModal(tweetId) {
                     <div>
                         <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
                         <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                        ${renderPlatformBadge(tweetPlatform)}
                     </div>
                     <div class="tweet-meta">
                         <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(tweet.created_at)}</a>
@@ -533,9 +551,7 @@ async function loadRepliesIntoModal(tweetId) {
             data.replies.forEach(replyData => {
                 const reply = replyData.tweet;
                 const replyCount = replyData.reply_count;
-                const replyUrl = reply.author_username
-                    ? `https://twitter.com/${reply.author_username}/status/${reply.id}`
-                    : `https://twitter.com/i/status/${reply.id}`;
+                const { platform: replyPlatform, url: replyUrl } = getPlatformInfo(reply.id, reply.platform, reply.author_username);
 
                 html += `
                     <div class="modal-reply">
@@ -543,6 +559,7 @@ async function loadRepliesIntoModal(tweetId) {
                             <div>
                                 <span class="tweet-author">${escapeHtml(reply.author_display_name || reply.author_username || 'Unknown')}</span>
                                 <span class="tweet-username">@${escapeHtml(reply.author_username || 'unknown')}</span>
+                                ${renderPlatformBadge(replyPlatform)}
                             </div>
                             <div class="tweet-meta">
                                 <a href="${replyUrl}" target="_blank" rel="noopener" class="tweet-link">${formatDate(reply.created_at)}</a>
@@ -608,6 +625,7 @@ window.addEventListener('scroll', () => {
 });
 
 modeSelect.addEventListener('change', () => { loadChains(); updateStats(modeSelect.value); });
+platformSelect.addEventListener('change', () => loadChains());
 sortSelect.addEventListener('change', () => loadChains());
 
 // Initial load

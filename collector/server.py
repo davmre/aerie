@@ -29,6 +29,7 @@ from database import (
     get_mode,
     get_mode_decisions_batch,
     get_mode_label_counts,
+    get_platform_stats,
     get_prompt,
     get_prompt_responses_batch,
     get_replies_for_tweet,
@@ -293,11 +294,16 @@ def create_app(config=None):
         mode_id = request.args.get("mode")
         if mode_id:
             try:
-                return jsonify(get_mode_stats(mode_id, db_path=db_path))
+                mode_stats = get_mode_stats(mode_id, db_path=db_path)
+                # Add platform breakdown
+                mode_stats["platforms"] = get_platform_stats(db_path)
+                return jsonify(mode_stats)
             except KeyError as e:
                 return jsonify({"error": str(e)}), 400
         # Fallback to legacy stats for backwards compatibility
-        return jsonify(get_stats(db_path=db_path))
+        legacy_stats = get_stats(db_path=db_path)
+        legacy_stats["platforms"] = get_platform_stats(db_path)
+        return jsonify(legacy_stats)
 
     @app.route("/tweets/check", methods=["POST", "OPTIONS"])
     def check_tweets():
@@ -787,6 +793,7 @@ def create_app(config=None):
         Query params:
         - mode: Mode ID for status calculation
         - status: Filter by status (all, pending, approved, filtered, unlabeled)
+        - platform: Filter by platform (twitter, bluesky)
         - search: Search in author or text
         - sort: Sort field (created_at, captured_at)
         - limit: Number of tweets
@@ -796,6 +803,7 @@ def create_app(config=None):
         db_path = get_db_path()
         mode_id = request.args.get("mode", "default")
         status_filter = request.args.get("status", "all")
+        platform_filter = request.args.get("platform")
         search = request.args.get("search", "")
         sort_field = request.args.get("sort", "captured_at")
         limit = request.args.get("limit", 20, type=int)
@@ -832,6 +840,14 @@ def create_app(config=None):
             else:
                 # All tweets
                 query = "SELECT * FROM tweets t"
+
+            # Platform filter
+            if platform_filter:
+                if "WHERE" in query:
+                    query += " AND t.platform = ?"
+                else:
+                    query += " WHERE t.platform = ?"
+                params.append(platform_filter)
 
             # Search filter
             if search:
@@ -1059,6 +1075,7 @@ def create_app(config=None):
 
         Query params:
         - mode: Mode ID for filtering (default: "default")
+        - platform: Filter by platform (twitter, bluesky)
         - sort: Sort field for chains (created_at or captured_at)
         - limit: Number of chains to return
         - offset: Pagination offset
@@ -1071,6 +1088,7 @@ def create_app(config=None):
         """
         db_path = get_db_path()
         mode_id = request.args.get("mode", "default")
+        platform_filter = request.args.get("platform")
         sort_field = request.args.get("sort", "captured_at")
         limit = request.args.get("limit", 20, type=int)
         offset = request.args.get("offset", 0, type=int)
@@ -1081,6 +1099,7 @@ def create_app(config=None):
             sort_field=sort_field,
             limit=limit,
             offset=offset,
+            platform=platform_filter,
             db_path=db_path,
         )
 

@@ -23,6 +23,13 @@
         {% endfor %}
     </select>
 
+    <label>Platform:</label>
+    <select id="platform-select">
+        <option value="all">All</option>
+        <option value="twitter">Twitter/X</option>
+        <option value="bluesky">Bluesky</option>
+    </select>
+
     <label>Filter:</label>
     <select id="status-filter">
         <option value="all">All</option>
@@ -68,6 +75,7 @@ let showResponses = false;
 // DOM elements
 const container = document.getElementById('tweets-container');
 const modeSelect = document.getElementById('mode-select');
+const platformSelect = document.getElementById('platform-select');
 const statusFilter = document.getElementById('status-filter');
 const showResponsesSelect = document.getElementById('show-responses');
 const searchInput = document.getElementById('search');
@@ -81,7 +89,14 @@ async function updateStats(mode) {
         statsDiv.textContent = '';
         return;
     }
-    statsDiv.textContent = `${stats.total} tweets | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
+    let platformInfo = '';
+    if (stats.platforms) {
+        const parts = [];
+        if (stats.platforms.twitter) parts.push(`${stats.platforms.twitter} X`);
+        if (stats.platforms.bluesky) parts.push(`${stats.platforms.bluesky} Bluesky`);
+        if (parts.length > 0) platformInfo = ` (${parts.join(', ')})`;
+    }
+    statsDiv.textContent = `${stats.total} tweets${platformInfo} | ${stats.approved} approved | ${stats.filtered} filtered | ${stats.pending} pending`;
 }
 
 // Load tweets
@@ -102,6 +117,7 @@ async function loadTweets() {
         });
         if (status !== 'all') params.set('status', status);
         if (search) params.set('search', search);
+        if (platformSelect.value !== 'all') params.set('platform', platformSelect.value);
 
         const response = await fetch(`/api/ui/tweets?${params}`);
         const data = await response.json();
@@ -133,9 +149,7 @@ function renderTweets() {
 function renderTweet(tweet, index) {
     const modeStatus = tweet.mode_status || 'pending';
     const humanLabel = tweet.human_label;
-    const tweetUrl = tweet.author_username
-        ? `https://twitter.com/${tweet.author_username}/status/${tweet.id}`
-        : `https://twitter.com/i/status/${tweet.id}`;
+    const { platform, url: tweetUrl } = getPlatformInfo(tweet.id, tweet.platform, tweet.author_username);
     const retweetedBy = tweet.retweeted_by || [];
 
     const threadAncestors = tweet.thread_ancestors || [];
@@ -152,6 +166,7 @@ function renderTweet(tweet, index) {
                 <div>
                     <span class="tweet-author">${escapeHtml(tweet.author_display_name || tweet.author_username || 'Unknown')}</span>
                     <span class="tweet-username">@${escapeHtml(tweet.author_username || 'unknown')}</span>
+                    ${renderPlatformBadge(platform)}
                     <a href="${tweetUrl}" target="_blank" rel="noopener" class="tweet-link" onclick="event.stopPropagation()">↗</a>
                 </div>
                 <div class="tweet-meta">
@@ -319,6 +334,7 @@ document.addEventListener('keydown', (e) => {
 
 // Event listeners
 modeSelect.addEventListener('change', () => { currentPage = 0; loadTweets(); updateStats(modeSelect.value); });
+platformSelect.addEventListener('change', () => { currentPage = 0; loadTweets(); });
 statusFilter.addEventListener('change', () => { currentPage = 0; loadTweets(); });
 showResponsesSelect.addEventListener('change', (e) => {
     showResponses = e.target.value === 'expanded';
