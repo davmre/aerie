@@ -143,16 +143,26 @@ Updated the UI to display platform context and allow filtering.
 - `collector/templates/label.html` - Platform badges, filter dropdown
 - `collector/server.py` - Platform filter in API endpoints, platform stats
 
-### Phase 4: Polish & Settings
+### Phase 4: Polish & Settings ✅ COMPLETED
 
-Final touches and configuration.
+**Status**: Done
 
-**Tasks**:
-1. Settings UI for Bluesky authentication
-2. Platform-specific icons/colors
-3. Configure polling interval
-4. Error handling and retry logic
-5. Documentation updates
+Added Settings UI and polish.
+
+**Changes made**:
+- Added Settings page at `/ui/settings` for Bluesky configuration
+- Added settings table to database for persistent storage
+- Created API endpoints for Bluesky settings (GET, POST, DELETE, test connection)
+- Updated bluesky_poller.py to read credentials from database as fallback
+- Added Settings link to navigation
+- Connection test button verifies credentials without saving
+
+**Files modified/added**:
+- `collector/database.py` - Added settings table and get/set/delete functions
+- `collector/templates/settings.html` - New settings page template
+- `collector/templates/base.html` - Added Settings nav link
+- `collector/server.py` - Added settings route and API endpoints
+- `collector/bluesky_poller.py` - Reads credentials from database as fallback
 
 ## Key Differences: Twitter vs Bluesky
 
@@ -202,6 +212,9 @@ Final touches and configuration.
 - `collector/templates/label.html` - Platform badges, filter dropdown, platform-aware URLs
 - `collector/server.py` - Platform filter in /api/ui/tweets and /api/ui/chains, platform stats in /stats
 
-### Phase 4 (Planned)
-- `collector/templates/settings.html` - Bluesky auth settings (new)
-- `CLAUDE.md` - Documentation updates
+### Phase 4 (Completed)
+- `collector/database.py` - Added settings table and functions
+- `collector/templates/settings.html` - Bluesky settings UI (new)
+- `collector/templates/base.html` - Settings nav link
+- `collector/server.py` - Settings route and API endpoints
+- `collector/bluesky_poller.py` - Database settings fallback

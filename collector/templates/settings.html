@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Aerie{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .settings-container {
+        max-width: 600px;
+        margin: 0 auto;
+    }
+
+    .settings-section {
+        background: var(--bg-card);
+        border: 1px solid var(--border-secondary);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .settings-section h2 {
+        margin: 0 0 16px 0;
+        font-size: 1.1rem;
+        color: var(--text-heading);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .settings-section h2 .platform-icon {
+        font-size: 1.2rem;
+    }
+
+    .form-group {
+        margin-bottom: 16px;
+    }
+
+    .form-group:last-child {
+        margin-bottom: 0;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+    }
+
+    .form-group input[type="text"],
+    .form-group input[type="password"] {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border-input);
+        background: var(--bg-input);
+        color: var(--text-primary);
+        font-size: 0.95rem;
+    }
+
+    .form-group input:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .form-group .help-text {
+        margin-top: 6px;
+        font-size: 0.8rem;
+        color: var(--text-tertiary);
+    }
+
+    .form-group .help-text a {
+        color: var(--accent);
+    }
+
+    .button-row {
+        display: flex;
+        gap: 12px;
+        margin-top: 20px;
+    }
+
+    .btn-primary {
+        background: var(--btn-primary-bg);
+        border-color: var(--btn-primary-border);
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background: var(--btn-primary-hover);
+    }
+
+    .btn-test {
+        background: var(--bg-button);
+        border-color: var(--border-tertiary);
+    }
+
+    .connection-status {
+        margin-top: 16px;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 0.9rem;
+    }
+
+    .connection-status.success {
+        background: var(--accent-approved-bg);
+        color: var(--accent-approved-text);
+        border: 1px solid var(--accent-approved-border);
+    }
+
+    .connection-status.error {
+        background: var(--accent-filtered-bg);
+        color: var(--accent-filtered-text);
+        border: 1px solid var(--accent-filtered-border);
+    }
+
+    .connection-status.pending {
+        background: var(--accent-pending-bg);
+        color: var(--accent-pending-text);
+        border: 1px solid var(--accent-pending-text);
+    }
+
+    .connection-status.hidden {
+        display: none;
+    }
+
+    .poller-status {
+        margin-top: 16px;
+        padding: 12px;
+        background: var(--bg-nested);
+        border-radius: 6px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+
+    .poller-status .status-row {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+
+    .poller-status .status-row:last-child {
+        margin-bottom: 0;
+    }
+
+    .poller-status .status-label {
+        color: var(--text-tertiary);
+    }
+
+    .password-toggle {
+        position: relative;
+    }
+
+    .password-toggle input {
+        padding-right: 40px;
+    }
+
+    .password-toggle .toggle-btn {
+        position: absolute;
+        right: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        color: var(--text-tertiary);
+        cursor: pointer;
+        padding: 4px;
+    }
+
+    .password-toggle .toggle-btn:hover {
+        color: var(--text-primary);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+    <h1 style="margin-bottom: 24px;">Settings</h1>
+
+    <!-- Bluesky Settings -->
+    <div class="settings-section">
+        <h2>
+            <span class="platform-icon">🦋</span>
+            Bluesky Integration
+        </h2>
+
+        <form id="bluesky-form">
+            <div class="form-group">
+                <label for="bluesky-handle">Handle</label>
+                <input type="text" id="bluesky-handle" placeholder="yourname.bsky.social" autocomplete="username">
+                <div class="help-text">Your Bluesky handle (e.g., alice.bsky.social or custom domain)</div>
+            </div>
+
+            <div class="form-group">
+                <label for="bluesky-password">App Password</label>
+                <div class="password-toggle">
+                    <input type="password" id="bluesky-password" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="current-password">
+                    <button type="button" class="toggle-btn" onclick="togglePassword()">👁</button>
+                </div>
+                <div class="help-text">
+                    Create an app password at
+                    <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener">bsky.app/settings/app-passwords</a>
+                </div>
+            </div>
+
+            <div class="button-row">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-test" onclick="testConnection()">Test Connection</button>
+            </div>
+        </form>
+
+        <div id="connection-status" class="connection-status hidden"></div>
+
+        <div id="poller-status" class="poller-status" style="display: none;">
+            <div class="status-row">
+                <span class="status-label">Last poll:</span>
+                <span id="last-poll-time">Never</span>
+            </div>
+            <div class="status-row">
+                <span class="status-label">Posts fetched:</span>
+                <span id="posts-fetched">0</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Usage Notes -->
+    <div class="settings-section">
+        <h2>Usage Notes</h2>
+        <div style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6;">
+            <p style="margin-bottom: 12px;">
+                After saving your Bluesky credentials, you can poll your timeline using the command line:
+            </p>
+            <pre style="background: var(--bg-nested); padding: 12px; border-radius: 6px; overflow-x: auto; margin-bottom: 12px;">cd collector
+python bluesky_poller.py --watch</pre>
+            <p style="margin-bottom: 12px;">
+                The poller will fetch posts from your Bluesky home timeline and store them in the database
+                for classification alongside your Twitter content.
+            </p>
+            <p>
+                <strong>Note:</strong> Settings saved here are stored in the local database. Environment variables
+                (<code>BLUESKY_HANDLE</code>, <code>BLUESKY_APP_PASSWORD</code>) take precedence if set.
+            </p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const form = document.getElementById('bluesky-form');
+const handleInput = document.getElementById('bluesky-handle');
+const passwordInput = document.getElementById('bluesky-password');
+const statusDiv = document.getElementById('connection-status');
+
+// Load current settings on page load
+async function loadSettings() {
+    try {
+        const response = await fetch('/api/settings/bluesky');
+        const data = await response.json();
+        if (data.handle) {
+            handleInput.value = data.handle;
+        }
+        if (data.has_password) {
+            passwordInput.placeholder = '••••••••••••••••';
+        }
+    } catch (err) {
+        console.error('Failed to load settings:', err);
+    }
+}
+
+// Save settings
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const handle = handleInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!handle) {
+        showStatus('Handle is required', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/settings/bluesky', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ handle, password: password || undefined })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showStatus('Settings saved successfully', 'success');
+            // Clear password field after save (it's now stored)
+            if (password) {
+                passwordInput.value = '';
+                passwordInput.placeholder = '••••••••••••••••';
+            }
+        } else {
+            showStatus(data.error || 'Failed to save settings', 'error');
+        }
+    } catch (err) {
+        showStatus('Failed to save settings: ' + err.message, 'error');
+    }
+});
+
+// Test connection
+async function testConnection() {
+    const handle = handleInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!handle) {
+        showStatus('Enter a handle first', 'error');
+        return;
+    }
+
+    showStatus('Testing connection...', 'pending');
+
+    try {
+        const response = await fetch('/api/settings/bluesky/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ handle, password: password || undefined })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            showStatus(`Connected as @${data.handle}`, 'success');
+        } else {
+            showStatus(data.error || 'Connection failed', 'error');
+        }
+    } catch (err) {
+        showStatus('Connection test failed: ' + err.message, 'error');
+    }
+}
+
+function showStatus(message, type) {
+    statusDiv.textContent = message;
+    statusDiv.className = 'connection-status ' + type;
+}
+
+function togglePassword() {
+    const input = document.getElementById('bluesky-password');
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+// Load settings on page load
+loadSettings();
+</script>
+{% endblock %}

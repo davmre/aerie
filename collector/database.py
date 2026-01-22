@@ -210,6 +210,13 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_mode_decisions_mode ON mode_decisions(mode_id);
             CREATE INDEX IF NOT EXISTS idx_mode_decisions_mode_decision
                 ON mode_decisions(mode_id, decision);
+
+            -- Application settings (key-value store)
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT NOT NULL
+            );
         """)
 
         # Migration: Add new author columns if they don't exist
@@ -1182,6 +1189,49 @@ def get_platform_stats(db_path: Path = DEFAULT_DB_PATH) -> dict[str, int]:
             "SELECT platform, COUNT(*) as count FROM tweets GROUP BY platform"
         ).fetchall()
         return {row["platform"]: row["count"] for row in rows}
+
+
+# =============================================================================
+# Settings
+# =============================================================================
+
+
+def get_setting(key: str, db_path: Path = DEFAULT_DB_PATH) -> str | None:
+    """Get a setting value by key."""
+    with transaction(db_path) as conn:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row else None
+
+
+def set_setting(key: str, value: str | None, db_path: Path = DEFAULT_DB_PATH) -> None:
+    """Set a setting value."""
+    with transaction(db_path) as conn:
+        if value is None:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+        else:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?
+                """,
+                (key, value, datetime.utcnow().isoformat(), value, datetime.utcnow().isoformat()),
+            )
+
+
+def get_all_settings(db_path: Path = DEFAULT_DB_PATH) -> dict[str, str]:
+    """Get all settings as a dictionary."""
+    with transaction(db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+
+def delete_setting(key: str, db_path: Path = DEFAULT_DB_PATH) -> None:
+    """Delete a setting."""
+    with transaction(db_path) as conn:
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
 
 # =============================================================================

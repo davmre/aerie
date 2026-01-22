@@ -25,6 +25,7 @@ from database import (
     create_prompt,
     delete_mode,
     delete_prompt,
+    delete_setting,
     get_conversation_roots,
     get_mode,
     get_mode_decisions_batch,
@@ -34,6 +35,7 @@ from database import (
     get_prompt_responses_batch,
     get_replies_for_tweet,
     get_retweets_batch,
+    get_setting,
     get_stats,
     get_thread_context_batch,
     get_tweet,
@@ -41,6 +43,7 @@ from database import (
     invalidate_mode_decisions,
     list_modes,
     list_prompts,
+    set_setting,
     store_retweets,
     store_tweets,
     transaction,
@@ -753,6 +756,91 @@ def create_app(config=None):
         return jsonify({"providers": list_providers()})
 
     # =========================================================================
+    # Settings API
+    # =========================================================================
+
+    @app.route("/api/settings/bluesky", methods=["GET"])
+    def api_get_bluesky_settings():
+        """Get Bluesky settings (password is masked)."""
+        db_path = get_db_path()
+        handle = get_setting("bluesky_handle", db_path)
+        password = get_setting("bluesky_password", db_path)
+
+        return jsonify({
+            "handle": handle or "",
+            "has_password": bool(password),
+        })
+
+    @app.route("/api/settings/bluesky", methods=["POST"])
+    def api_save_bluesky_settings():
+        """Save Bluesky settings."""
+        db_path = get_db_path()
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        handle = data.get("handle", "").strip()
+        password = data.get("password")
+
+        if not handle:
+            return jsonify({"error": "Handle is required"}), 400
+
+        # Save handle
+        set_setting("bluesky_handle", handle, db_path)
+
+        # Only update password if provided (allows updating handle without changing password)
+        if password:
+            set_setting("bluesky_password", password, db_path)
+
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/settings/bluesky/test", methods=["POST"])
+    def api_test_bluesky_connection():
+        """Test Bluesky connection with provided or saved credentials."""
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        # Use provided credentials or fall back to saved ones
+        handle = data.get("handle", "").strip()
+        password = data.get("password")
+
+        if not handle:
+            handle = get_setting("bluesky_handle", db_path) or ""
+        if not password:
+            password = get_setting("bluesky_password", db_path)
+
+        if not handle:
+            return jsonify({"error": "No handle provided or saved"}), 400
+        if not password:
+            return jsonify({"error": "No password provided or saved"}), 400
+
+        # Try to connect
+        try:
+            from atproto import Client
+            from atproto_client.exceptions import UnauthorizedError
+
+            client = Client()
+            client.login(handle, password)
+
+            return jsonify({
+                "success": True,
+                "handle": client.me.handle if client.me else handle,  # type: ignore[union-attr]
+                "did": client.me.did if client.me else None,  # type: ignore[union-attr]
+            })
+        except UnauthorizedError:
+            return jsonify({"error": "Authentication failed. Check your credentials."}), 401
+        except Exception as e:
+            return jsonify({"error": f"Connection failed: {str(e)}"}), 500
+
+    @app.route("/api/settings/bluesky", methods=["DELETE"])
+    def api_delete_bluesky_settings():
+        """Delete Bluesky settings."""
+        db_path = get_db_path()
+        delete_setting("bluesky_handle", db_path)
+        delete_setting("bluesky_password", db_path)
+        return jsonify({"status": "ok"})
+
+    # =========================================================================
     # Web UI Routes
     # =========================================================================
 
@@ -784,6 +872,13 @@ def create_app(config=None):
         db_path = get_db_path()
         modes = get_available_modes(db_path)
         return render_template("prompts.html", modes=modes, active_page="prompts")
+
+    @app.route("/ui/settings")
+    def ui_settings():
+        """Settings interface."""
+        db_path = get_db_path()
+        modes = get_available_modes(db_path)
+        return render_template("settings.html", modes=modes, active_page="settings")
 
     @app.route("/api/ui/tweets", methods=["GET"])
     def api_ui_tweets():

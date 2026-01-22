@@ -28,6 +28,7 @@ from atproto_client.exceptions import UnauthorizedError
 
 from database import (
     DEFAULT_DB_PATH,
+    get_setting,
     init_database,
     store_retweets,
     store_tweets,
@@ -37,23 +38,36 @@ from database import (
 PLATFORM = "bluesky"
 
 
-def get_credentials() -> tuple[str, str]:
-    """Get Bluesky credentials from environment variables."""
+def get_credentials(db_path: Path = DEFAULT_DB_PATH) -> tuple[str, str]:
+    """
+    Get Bluesky credentials from environment variables or database settings.
+
+    Priority: Environment variables > Database settings
+    """
+    # Try environment variables first
     handle = os.environ.get("BLUESKY_HANDLE")
     app_password = os.environ.get("BLUESKY_APP_PASSWORD")
 
+    # Fall back to database settings
+    if not handle:
+        handle = get_setting("bluesky_handle", db_path)
+    if not app_password:
+        app_password = get_setting("bluesky_password", db_path)
+
     if not handle or not app_password:
         raise ValueError(
-            "Missing credentials. Set BLUESKY_HANDLE and BLUESKY_APP_PASSWORD environment variables.\n"
+            "Missing credentials. Either:\n"
+            "  1. Set BLUESKY_HANDLE and BLUESKY_APP_PASSWORD environment variables, or\n"
+            "  2. Configure credentials in the web UI at /ui/settings\n"
             "Create an app password at: https://bsky.app/settings/app-passwords"
         )
 
     return handle, app_password
 
 
-def create_client() -> Client:
+def create_client(db_path: Path = DEFAULT_DB_PATH) -> Client:
     """Create and authenticate a Bluesky client."""
-    handle, app_password = get_credentials()
+    handle, app_password = get_credentials(db_path)
     client = Client()
 
     try:
@@ -304,7 +318,7 @@ def run_poller(
     init_database(db_path)
 
     # Create authenticated client
-    client = create_client()
+    client = create_client(db_path)
 
     def do_poll():
         print(f"[Bluesky] Polling timeline (limit={limit})...")
