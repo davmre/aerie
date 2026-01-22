@@ -77,21 +77,36 @@ bluesky_id = "bsky:at://did:plc:xxx/app.bsky.feed.post/abc123"
 }
 ```
 
-### Phase 2: Bluesky Poller (Next)
+### Phase 2: Bluesky Poller ✅ COMPLETED
 
-Create a service to poll Bluesky's API and store posts in the database.
+**Status**: Done (commit `0f68014`)
 
-**Tasks**:
-1. Install ATProto SDK: `pip install atproto`
-2. Create `collector/bluesky_poller.py`
-3. Implement authentication (app password or OAuth)
-4. Poll `app.bsky.feed.getTimeline` endpoint
-5. Normalize Bluesky posts to Aerie's schema
-6. Handle Bluesky-specific features:
-   - Reposts (separate record type)
-   - Quote posts (embed.record)
-   - Threads (reply.root + reply.parent)
-   - Content labels
+Created a poller service to fetch posts from Bluesky's API.
+
+**Files added**:
+- `collector/bluesky_poller.py` - Main poller with auth, fetching, normalization
+- Updated `collector/requirements.txt` - Added `atproto>=0.0.55`
+
+**Features implemented**:
+- Authentication via `BLUESKY_HANDLE` and `BLUESKY_APP_PASSWORD` env vars
+- Polls `app.bsky.feed.getTimeline` API
+- Normalizes Bluesky posts to Aerie's tweet schema
+- Handles reposts (stores in retweets table)
+- Handles quote posts and threads
+- Extracts engagement metrics, labels, and language tags
+- Stores platform metadata (CID, root_uri, labels, langs)
+- Supports continuous polling with `--watch` flag
+
+**Usage**:
+```bash
+export BLUESKY_HANDLE="yourhandle.bsky.social"
+export BLUESKY_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"
+python bluesky_poller.py              # Poll once
+python bluesky_poller.py --watch      # Poll continuously
+python bluesky_poller.py -v           # Verbose output
+```
+
+**Bug fix**: Fixed database.py to move platform index creation after column migration
 
 **Post Normalization Mapping**:
 
