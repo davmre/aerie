@@ -214,29 +214,28 @@ function normalizeTweet(raw, contextInfo = {}) {
 
     // DEBUG: Log card-related fields for tweets with URLs (to understand Twitter's card structure)
     const hasUrls = legacy.entities?.urls?.length > 0;
-    if (hasUrls) {
+    if (hasUrls && raw.card?.legacy) {
+      const bindingValues = raw.card.legacy.binding_values;
+      // binding_values might be array or object - dump first few items to see structure
+      let sampleBindings = null;
+      if (Array.isArray(bindingValues)) {
+        // It's an array - show first 5 items
+        sampleBindings = bindingValues.slice(0, 5);
+      } else if (bindingValues && typeof bindingValues === 'object') {
+        // It's an object - show all keys and a few values
+        sampleBindings = {};
+        for (const [key, value] of Object.entries(bindingValues).slice(0, 8)) {
+          sampleBindings[key] = value;
+        }
+      }
       const cardInfo = {
         tweet_id: raw.rest_id || legacy.id_str,
-        has_card: !!raw.card,
-        has_card_legacy: !!raw.card?.legacy,
-        card_keys: raw.card ? Object.keys(raw.card) : [],
-        card_legacy_keys: raw.card?.legacy ? Object.keys(raw.card.legacy) : [],
-        binding_value_keys: raw.card?.legacy?.binding_values ? Object.keys(raw.card.legacy.binding_values) : [],
-        // Sample some actual values if they exist
-        card_url: raw.card?.legacy?.url || raw.card?.url,
-        title: raw.card?.legacy?.binding_values?.title?.string_value,
-        description: raw.card?.legacy?.binding_values?.description?.string_value,
-        thumbnail: raw.card?.legacy?.binding_values?.thumbnail_image?.image_value?.url ||
-                   raw.card?.legacy?.binding_values?.thumbnail_image_large?.image_value?.url,
-        // Also check for unified_card (newer format)
-        has_unified_card: !!raw.card?.legacy?.binding_values?.unified_card,
-        // Check other possible card locations
-        has_raw_card_url: !!raw.card_url,
+        card_name: raw.card.legacy.name,  // e.g., "summary_large_image", "player", etc.
+        card_url: raw.card.legacy.url,
+        binding_values_type: Array.isArray(bindingValues) ? 'array' : typeof bindingValues,
+        binding_values_sample: sampleBindings,
       };
-      // Only log if there's card data (to reduce noise)
-      if (cardInfo.has_card || cardInfo.has_raw_card_url) {
-        console.log("[Aerie] Card data found:", JSON.stringify(cardInfo, null, 2));
-      }
+      console.log("[Aerie] Card data found:", JSON.stringify(cardInfo, null, 2));
     }
 
     // Extract full text - prefer note_tweet for long-form content
