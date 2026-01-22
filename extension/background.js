@@ -309,27 +309,11 @@ function normalizeTweet(raw, contextInfo = {}) {
 function extractMedia(entities) {
   if (!entities?.media) return [];
 
-  // DEBUG: Check nested structures for alt text
-  for (const m of entities.media) {
-    // Check various possible locations for alt text
-    const altText = m.alt_text || m.ext_alt_text || m.media_results?.result?.legacy?.ext_alt_text;
-    // Only log if we find alt text or have features to examine
-    if (altText) {
-      console.log("[Aerie] Found alt text:", JSON.stringify({
-        type: m.type,
-        alt_text: altText,
-      }, null, 2));
-    }
-    // Log features structure once to understand it
-    if (m.features) {
-      console.log("[Aerie] Media features:", JSON.stringify(m.features, null, 2));
-    }
-  }
-
   return entities.media.map(m => ({
     type: m.type,
     url: m.media_url_https || m.media_url,
     expanded_url: m.expanded_url,
+    alt: m.alt_text || m.ext_alt_text || "",  // User-provided alt text when available
   }));
 }
 
