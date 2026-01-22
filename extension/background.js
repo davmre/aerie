@@ -212,32 +212,6 @@ function normalizeTweet(raw, contextInfo = {}) {
     // Handle both direct tweet objects and wrapped ones
     const legacy = raw.legacy || raw;
 
-    // DEBUG: Log card-related fields for tweets with URLs (to understand Twitter's card structure)
-    const hasUrls = legacy.entities?.urls?.length > 0;
-    if (hasUrls && raw.card?.legacy) {
-      const bindingValues = raw.card.legacy.binding_values;
-      // binding_values might be array or object - dump first few items to see structure
-      let sampleBindings = null;
-      if (Array.isArray(bindingValues)) {
-        // It's an array - show first 5 items
-        sampleBindings = bindingValues.slice(0, 5);
-      } else if (bindingValues && typeof bindingValues === 'object') {
-        // It's an object - show all keys and a few values
-        sampleBindings = {};
-        for (const [key, value] of Object.entries(bindingValues).slice(0, 8)) {
-          sampleBindings[key] = value;
-        }
-      }
-      const cardInfo = {
-        tweet_id: raw.rest_id || legacy.id_str,
-        card_name: raw.card.legacy.name,  // e.g., "summary_large_image", "player", etc.
-        card_url: raw.card.legacy.url,
-        binding_values_type: Array.isArray(bindingValues) ? 'array' : typeof bindingValues,
-        binding_values_sample: sampleBindings,
-      };
-      console.log("[Aerie] Card data found:", JSON.stringify(cardInfo, null, 2));
-    }
-
     // Extract full text - prefer note_tweet for long-form content
     const noteTweetText = raw.note_tweet?.note_tweet_results?.result?.text;
     const fullText = noteTweetText || legacy.full_text || legacy.text || "";
@@ -305,7 +279,19 @@ function normalizeTweet(raw, contextInfo = {}) {
       is_promoted: isPromoted,
       quoted_tweet_id: raw.quoted_status_result?.result?.rest_id ||
                        legacy.quoted_status_id_str || null,
-      media: extractMedia(legacy.extended_entities || legacy.entities),
+      media: (() => {
+        const media = extractMedia(legacy.extended_entities || legacy.entities);
+        const card = extractCard(raw);
+        if (card) {
+          // Resolve t.co URL to expanded URL using entities
+          const urlEntity = legacy.entities?.urls?.find(u => u.url === card.uri);
+          if (urlEntity?.expanded_url) {
+            card.uri = urlEntity.expanded_url;
+          }
+          media.push(card);
+        }
+        return media;
+      })(),
       urls: extractUrls(legacy.entities),
       hashtags: (legacy.entities?.hashtags || []).map(h => h.text),
       mentions: (legacy.entities?.user_mentions || []).map(m => ({
@@ -336,6 +322,68 @@ function extractUrls(entities) {
     expanded_url: u.expanded_url,
     display_url: u.display_url,
   }));
+}
+
+// Extract link preview card data from Twitter's card object
+function extractCard(raw) {
+  const card = raw.card?.legacy;
+  if (!card?.binding_values) return null;
+
+  // Convert binding_values array to a lookup object
+  const bindings = {};
+  for (const item of card.binding_values) {
+    if (item.key && item.value) {
+      bindings[item.key] = item.value;
+    }
+  }
+
+  // Get string value helper
+  const getString = (key) => bindings[key]?.string_value || "";
+
+  // Get image URL helper - try multiple possible keys in preference order
+  const getImageUrl = (...keys) => {
+    for (const key of keys) {
+      const url = bindings[key]?.image_value?.url;
+      if (url) return url;
+    }
+    return "";
+  };
+
+  // Extract title - try multiple possible keys
+  const title = getString("title") || getString("og:title") || "";
+
+  // Extract description
+  const description = getString("description") || "";
+
+  // Extract domain
+  const domain = getString("domain") || "";
+
+  // Extract thumbnail - prefer larger images, fall back to smaller
+  const thumb = getImageUrl(
+    "photo_image_full_size_large",
+    "thumbnail_image_large",
+    "photo_image_full_size_original",
+    "summary_photo_image_original",
+    "player_image_large",
+    "thumbnail_image",
+    "player_image"
+  );
+
+  // Only return card if we have meaningful content
+  if (!title && !description && !thumb) return null;
+
+  // Find the expanded URL for this card from entities
+  // card.url is the t.co short URL, we want the real URL
+  const cardUrl = card.url || "";
+
+  return {
+    type: "link",
+    uri: cardUrl,  // Will be resolved to expanded_url in normalizeTweet
+    title: title,
+    description: description,
+    domain: domain,
+    thumb: thumb,
+  };
 }
 
 // Send extracted tweets and retweets to local collector service
