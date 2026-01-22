@@ -152,6 +152,30 @@ def format_tweet_for_classification(tweet: dict) -> str:
     if tweet.get("reply_to_username"):
         parts.append(f"[Replying to @{tweet['reply_to_username']}]")
 
+    # Media with alt text
+    media_json = tweet.get("media_json")
+    if media_json:
+        import json
+        try:
+            media_list = json.loads(media_json) if isinstance(media_json, str) else media_json
+            for item in media_list:
+                media_type = item.get("type", "media")
+                alt = item.get("alt", "")
+                if media_type == "link":
+                    # Link preview card
+                    title = item.get("title", "")
+                    uri = item.get("uri", "")
+                    if title or uri:
+                        parts.append(f"[Link: {title or uri}]")
+                elif alt:
+                    # Image/video with alt text
+                    parts.append(f"[Image: {alt}]")
+                else:
+                    # Media without alt text - just note its presence
+                    parts.append(f"[{media_type}]")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     # Engagement metrics
     metrics = []
     if tweet.get("like_count", 0) > 0:
