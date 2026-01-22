@@ -357,6 +357,77 @@
             font-size: 2rem;
         }
 
+        /* Link preview card */
+        .link-preview-card {
+            display: flex;
+            margin-top: 12px;
+            background: var(--bg-nested);
+            border: 1px solid var(--border-secondary);
+            border-radius: 8px;
+            overflow: hidden;
+            text-decoration: none;
+            color: inherit;
+            transition: border-color 0.15s;
+        }
+
+        .link-preview-card:hover {
+            border-color: var(--accent);
+        }
+
+        .link-preview-thumb {
+            flex-shrink: 0;
+            width: 120px;
+            height: 120px;
+            background: var(--bg-button);
+        }
+
+        .link-preview-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .link-preview-content {
+            flex: 1;
+            padding: 12px;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .link-preview-title {
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+        }
+
+        .link-preview-url {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .link-preview-card.no-thumb {
+            padding: 12px;
+        }
+
+        .link-preview-card.no-thumb .link-preview-content {
+            padding: 0;
+        }
+
+        .link-preview-icon {
+            color: var(--text-tertiary);
+            margin-right: 8px;
+        }
+
         /* Collapsible text */
         .text-toggle {
             color: var(--accent);
@@ -960,10 +1031,48 @@
         }
 
         // =================================================================
-        // Media rendering (click-to-load)
+        // Media rendering (click-to-load for images/videos, immediate for links)
         // =================================================================
 
         let mediaIdCounter = 0;
+
+        function renderLinkPreview(link) {
+            const uri = escapeHtml(link.uri || '');
+            const title = escapeHtml(link.title || '');
+            const thumb = link.thumb || '';
+
+            // Extract domain for display
+            let domain = '';
+            try {
+                domain = new URL(link.uri).hostname.replace(/^www\./, '');
+            } catch (e) {
+                domain = link.uri;
+            }
+
+            if (thumb) {
+                return `
+                    <a href="${uri}" target="_blank" rel="noopener" class="link-preview-card" onclick="event.stopPropagation()">
+                        <div class="link-preview-thumb">
+                            <img src="${escapeHtml(thumb)}" alt="" loading="lazy">
+                        </div>
+                        <div class="link-preview-content">
+                            <div class="link-preview-title">${title || domain}</div>
+                            <div class="link-preview-url">${escapeHtml(domain)}</div>
+                        </div>
+                    </a>
+                `;
+            } else {
+                return `
+                    <a href="${uri}" target="_blank" rel="noopener" class="link-preview-card no-thumb" onclick="event.stopPropagation()">
+                        <span class="link-preview-icon">🔗</span>
+                        <div class="link-preview-content">
+                            <div class="link-preview-title">${title || domain}</div>
+                            <div class="link-preview-url">${escapeHtml(domain)}</div>
+                        </div>
+                    </a>
+                `;
+            }
+        }
 
         function renderMedia(mediaJson) {
             if (!mediaJson) return '';
@@ -977,26 +1086,42 @@
 
             if (!Array.isArray(media) || media.length === 0) return '';
 
-            const id = `media-${mediaIdCounter++}`;
-            const photoCount = media.filter(m => m.type === 'photo').length;
-            const videoCount = media.filter(m => m.type === 'video' || m.type === 'animated_gif').length;
+            // Separate link embeds from photos/videos
+            const links = media.filter(m => m.type === 'link');
+            const visualMedia = media.filter(m => m.type !== 'link');
 
-            // Build description
-            let desc = [];
-            if (photoCount > 0) desc.push(`${photoCount} image${photoCount > 1 ? 's' : ''}`);
-            if (videoCount > 0) desc.push(`${videoCount} video thumbnail${videoCount > 1 ? 's' : ''}`);
+            let result = '';
 
-            // Store media data for later loading
-            const mediaData = encodeURIComponent(JSON.stringify(media));
+            // Render link previews immediately (no click-to-load)
+            for (const link of links) {
+                result += renderLinkPreview(link);
+            }
 
-            return `
-                <div class="tweet-media" id="${id}" onclick="event.stopPropagation()">
-                    <div class="media-placeholder" onclick="loadMedia('${id}', '${mediaData}')">
-                        <span class="media-placeholder-icon">${videoCount > 0 ? '▶' : '🖼'}</span>
-                        <span>Click to load ${desc.join(' and ')}</span>
+            // Render photos/videos with click-to-load
+            if (visualMedia.length > 0) {
+                const id = `media-${mediaIdCounter++}`;
+                const photoCount = visualMedia.filter(m => m.type === 'photo').length;
+                const videoCount = visualMedia.filter(m => m.type === 'video' || m.type === 'animated_gif').length;
+
+                // Build description
+                let desc = [];
+                if (photoCount > 0) desc.push(`${photoCount} image${photoCount > 1 ? 's' : ''}`);
+                if (videoCount > 0) desc.push(`${videoCount} video thumbnail${videoCount > 1 ? 's' : ''}`);
+
+                // Store media data for later loading
+                const mediaData = encodeURIComponent(JSON.stringify(visualMedia));
+
+                result += `
+                    <div class="tweet-media" id="${id}" onclick="event.stopPropagation()">
+                        <div class="media-placeholder" onclick="loadMedia('${id}', '${mediaData}')">
+                            <span class="media-placeholder-icon">${videoCount > 0 ? '▶' : '🖼'}</span>
+                            <span>Click to load ${desc.join(' and ')}</span>
+                        </div>
                     </div>
-                </div>
-            `;
+                `;
+            }
+
+            return result;
         }
 
         function loadMedia(containerId, encodedData) {
@@ -1024,7 +1149,7 @@
                             </a>
                         </div>
                     `;
-                } else {
+                } else if (m.type === 'video' || m.type === 'animated_gif') {
                     // Video or animated_gif - show thumbnail with play overlay
                     return `
                         <div class="media-item">
@@ -1035,6 +1160,7 @@
                         </div>
                     `;
                 }
+                return '';
             }).join('');
 
             container.innerHTML = `<div class="media-grid ${gridClass}">${items}</div>`;
