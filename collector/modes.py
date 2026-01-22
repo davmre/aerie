@@ -390,7 +390,7 @@ def get_mode_stats(
     if not mode:
         raise KeyError(f"Mode not found: {mode_id}")
 
-    return get_cached_decision_stats(mode_id, db_path)
+    return get_cached_decision_stats(mode_id, db_path=db_path)
 
 
 def compute_mode_decisions_for_tweets(
