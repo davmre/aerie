@@ -287,6 +287,15 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     duplicates = 0
 
     with transaction(db_path) as conn:
+        # Pre-check which IDs already exist for accurate counting
+        # (rowcount is unreliable with ON CONFLICT DO UPDATE)
+        tweet_ids = [t["id"] for t in tweets]
+        placeholders = ",".join("?" * len(tweet_ids))
+        existing = conn.execute(
+            f"SELECT id FROM tweets WHERE id IN ({placeholders})", tweet_ids
+        ).fetchall()
+        existing_ids = {row[0] for row in existing}
+
         for tweet in tweets:
             try:
                 author = tweet.get("author", {})
@@ -297,7 +306,7 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                 if platform_metadata and not isinstance(platform_metadata, str):
                     platform_metadata = json.dumps(platform_metadata)
 
-                result = conn.execute(
+                conn.execute(
                     """
                     INSERT INTO tweets (
                         id, text, created_at, captured_at,
@@ -356,11 +365,11 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         json.dumps(tweet.get("mentions", [])),
                     ),
                 )
-                # rowcount is 1 for insert, 1 for update (if changes made), 0 for no-op update
-                if result.rowcount > 0:
-                    inserted += 1
-                else:
+                # Count based on pre-checked existing IDs
+                if tweet["id"] in existing_ids:
                     duplicates += 1
+                else:
+                    inserted += 1
             except sqlite3.IntegrityError:
                 # Shouldn't happen with ON CONFLICT, but just in case
                 duplicates += 1
@@ -389,7 +398,7 @@ def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dic
     with transaction(db_path) as conn:
         for rt in retweets:
             try:
-                conn.execute(
+                result = conn.execute(
                     """
                     INSERT INTO retweets (
                         original_tweet_id, retweeter_user_id, retweeter_username,
@@ -407,7 +416,11 @@ def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dic
                         rt.get("platform", "twitter"),
                     ),
                 )
-                inserted += 1
+                # rowcount is 0 when DO NOTHING triggers, 1 for actual insert
+                if result.rowcount > 0:
+                    inserted += 1
+                else:
+                    duplicates += 1
             except sqlite3.IntegrityError:
                 duplicates += 1
 
