@@ -309,18 +309,21 @@ function normalizeTweet(raw, contextInfo = {}) {
 function extractMedia(entities) {
   if (!entities?.media) return [];
 
-  // DEBUG: Log media object structure to find alt text fields
+  // DEBUG: Check nested structures for alt text
   for (const m of entities.media) {
-    const mediaInfo = {
-      type: m.type,
-      has_alt_text: !!m.alt_text,
-      has_ext_alt_text: !!m.ext_alt_text,
-      alt_text: m.alt_text,
-      ext_alt_text: m.ext_alt_text,
-      // Log all keys to find other potentially useful fields
-      all_keys: Object.keys(m),
-    };
-    console.log("[Aerie] Media object:", JSON.stringify(mediaInfo, null, 2));
+    // Check various possible locations for alt text
+    const altText = m.alt_text || m.ext_alt_text || m.media_results?.result?.legacy?.ext_alt_text;
+    // Only log if we find alt text or have features to examine
+    if (altText) {
+      console.log("[Aerie] Found alt text:", JSON.stringify({
+        type: m.type,
+        alt_text: altText,
+      }, null, 2));
+    }
+    // Log features structure once to understand it
+    if (m.features) {
+      console.log("[Aerie] Media features:", JSON.stringify(m.features, null, 2));
+    }
   }
 
   return entities.media.map(m => ({
