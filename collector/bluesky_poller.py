@@ -79,7 +79,7 @@ def create_client(db_path: Path = DEFAULT_DB_PATH) -> Client:
     return client
 
 
-def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | None]:
+def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | None, dict | None]:
     """
     Normalize a Bluesky feed item to Aerie's tweet schema.
 
@@ -88,9 +88,10 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
         client: Authenticated Bluesky client (for resolving references)
 
     Returns:
-        Tuple of (post_dict, repost_dict) where:
+        Tuple of (post_dict, repost_dict, quoted_post_dict) where:
         - post_dict: Normalized post for tweets table (or None if should skip)
         - repost_dict: Repost record if this is a repost (or None)
+        - quoted_post_dict: Quoted post for tweets table (or None if not a quote)
     """
     post = feed_item.post
     reason = getattr(feed_item, "reason", None)
@@ -103,7 +104,7 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
 
     # Skip posts without text (shouldn't happen, but be safe)
     if not hasattr(record, "text"):
-        return None, None
+        return None, None, None
 
     # Build the Aerie post ID
     post_id = f"bsky:{post.uri}"
@@ -125,16 +126,82 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
         if record.reply.root:
             root_uri = record.reply.root.uri
 
-    # Extract quote info
+    # Extract quote info and quoted post content
     quoted_post_id = None
+    quoted_post_dict = None
     is_quote = False
-    if hasattr(record, "embed") and record.embed:
-        embed = record.embed
-        # Check for quote post (embed.record or embed.recordWithMedia)
-        if hasattr(embed, "record") and embed.record:
+
+    # Check for quote embed in the post view (resolved data)
+    post_embed = getattr(post, "embed", None)
+    if post_embed:
+        # Handle app.bsky.embed.record (pure quote)
+        quoted_record = getattr(post_embed, "record", None)
+        # Handle app.bsky.embed.recordWithMedia (quote with media)
+        if not quoted_record and hasattr(post_embed, "record"):
+            quoted_record = post_embed.record
+
+        if quoted_record and hasattr(quoted_record, "uri"):
             is_quote = True
-            if hasattr(embed.record, "uri"):
-                quoted_post_id = f"bsky:{embed.record.uri}"
+            quoted_post_id = f"bsky:{quoted_record.uri}"
+
+            # Extract the quoted post's content to store separately
+            # The record view contains author and value (the actual post record)
+            quoted_author = getattr(quoted_record, "author", None)
+            quoted_value = getattr(quoted_record, "value", None)
+
+            if quoted_author and quoted_value and hasattr(quoted_value, "text"):
+                quoted_is_domain_verified = not quoted_author.handle.endswith(".bsky.social")
+
+                # Extract quoted post's metrics if available
+                quoted_like_count = getattr(quoted_record, "like_count", 0) or 0
+                quoted_repost_count = getattr(quoted_record, "repost_count", 0) or 0
+                quoted_reply_count = getattr(quoted_record, "reply_count", 0) or 0
+
+                # Extract quoted post's reply info
+                quoted_reply_to_id = None
+                quoted_root_uri = None
+                if hasattr(quoted_value, "reply") and quoted_value.reply:
+                    if quoted_value.reply.parent:
+                        quoted_reply_to_id = f"bsky:{quoted_value.reply.parent.uri}"
+                    if quoted_value.reply.root:
+                        quoted_root_uri = quoted_value.reply.root.uri
+
+                # Build platform metadata for quoted post
+                quoted_cid = getattr(quoted_record, "cid", None)
+                quoted_platform_metadata = {
+                    "cid": str(quoted_cid) if quoted_cid else None,
+                    "root_uri": quoted_root_uri,
+                    "labels": [],
+                    "langs": getattr(quoted_value, "langs", None) or [],
+                }
+
+                quoted_post_dict = {
+                    "id": quoted_post_id,
+                    "text": quoted_value.text,
+                    "created_at": getattr(quoted_value, "created_at", None),
+                    "platform": PLATFORM,
+                    "platform_metadata": quoted_platform_metadata,
+                    "author": {
+                        "id": quoted_author.did,
+                        "username": quoted_author.handle,
+                        "display_name": getattr(quoted_author, "display_name", None) or quoted_author.handle,
+                        "verified": quoted_is_domain_verified,
+                        "bio": getattr(quoted_author, "description", None),
+                        "followers_count": getattr(quoted_author, "followers_count", None),
+                        "following": None,
+                    },
+                    "metrics": {
+                        "like_count": quoted_like_count,
+                        "repost_count": quoted_repost_count,
+                        "reply_count": quoted_reply_count,
+                        "quote_count": 0,
+                    },
+                    "reply_to": {"tweet_id": quoted_reply_to_id} if quoted_reply_to_id else {},
+                    "is_retweet": False,
+                    "is_quote": False,
+                    "quoted_tweet_id": None,
+                    "media": [],  # Media extraction for quoted posts is complex, skip for now
+                }
 
     # Extract engagement metrics
     like_count = getattr(post, "like_count", 0) or 0
@@ -217,7 +284,7 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
             "platform": PLATFORM,
         }
 
-    return post_dict, repost_dict
+    return post_dict, repost_dict, quoted_post_dict
 
 
 def fetch_timeline(
@@ -262,18 +329,28 @@ def poll_and_store(
 
     posts = []
     reposts = []
+    quoted_posts = []
     skipped = 0
 
     for item in feed:
         try:
-            post_dict, repost_dict = normalize_post(item, client)
+            post_dict, repost_dict, quoted_post_dict = normalize_post(item, client)
+
+            # Store quoted post first (so it exists when the quoting post references it)
+            if quoted_post_dict:
+                quoted_posts.append(quoted_post_dict)
+                if verbose:
+                    author = quoted_post_dict["author"]["username"]
+                    text_preview = quoted_post_dict["text"][:30].replace("\n", " ")
+                    print(f"  [quoted] @{author}: {text_preview}...")
 
             if post_dict:
                 posts.append(post_dict)
                 if verbose:
                     author = post_dict["author"]["username"]
                     text_preview = post_dict["text"][:50].replace("\n", " ")
-                    print(f"  @{author}: {text_preview}...")
+                    qt_marker = " (quote)" if quoted_post_dict else ""
+                    print(f"  @{author}: {text_preview}...{qt_marker}")
 
             if repost_dict:
                 reposts.append(repost_dict)
@@ -283,7 +360,10 @@ def poll_and_store(
                 print(f"  [Warning] Failed to normalize post: {e}")
             skipped += 1
 
-    # Store in database
+    # Store quoted posts first (so foreign key references work)
+    quoted_result = store_tweets(quoted_posts, db_path) if quoted_posts else {"inserted": 0, "duplicates": 0}
+
+    # Store main posts
     post_result = store_tweets(posts, db_path) if posts else {"inserted": 0, "duplicates": 0}
     repost_result = store_retweets(reposts, db_path) if reposts else {"inserted": 0, "duplicates": 0}
 
@@ -291,6 +371,8 @@ def poll_and_store(
         "posts_fetched": len(feed),
         "posts_inserted": post_result["inserted"],
         "posts_duplicates": post_result["duplicates"],
+        "quoted_posts_inserted": quoted_result["inserted"],
+        "quoted_posts_duplicates": quoted_result["duplicates"],
         "reposts_inserted": repost_result["inserted"],
         "reposts_duplicates": repost_result["duplicates"],
         "skipped": skipped,
@@ -327,6 +409,8 @@ def run_poller(
             f"[Bluesky] Fetched {stats['posts_fetched']} posts: "
             f"{stats['posts_inserted']} new, {stats['posts_duplicates']} existing"
         )
+        if stats["quoted_posts_inserted"] > 0:
+            print(f"[Bluesky] Stored {stats['quoted_posts_inserted']} quoted posts")
         if stats["reposts_inserted"] > 0:
             print(f"[Bluesky] Recorded {stats['reposts_inserted']} reposts")
         if stats["skipped"] > 0:
