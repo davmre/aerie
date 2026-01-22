@@ -190,6 +190,23 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
                                         "display_url": display_text,
                                     })
 
+                # Extract media from quoted post's embeds (resolved views)
+                quoted_media = []
+                quoted_embeds = getattr(quoted_record, "embeds", None) or []
+                for embed in quoted_embeds:
+                    # Handle images embed
+                    if hasattr(embed, "images") and embed.images:
+                        for img in embed.images:
+                            thumb = getattr(img, "thumb", None)
+                            fullsize = getattr(img, "fullsize", None)
+                            if thumb or fullsize:
+                                quoted_media.append({
+                                    "type": "photo",
+                                    "url": thumb or fullsize,
+                                    "expanded_url": fullsize or thumb,
+                                    "alt": getattr(img, "alt", ""),
+                                })
+
                 # Build platform metadata for quoted post
                 quoted_cid = getattr(quoted_record, "cid", None)
                 quoted_platform_metadata = {
@@ -224,7 +241,7 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
                     "is_retweet": False,
                     "is_quote": False,
                     "quoted_tweet_id": None,
-                    "media": [],  # Media extraction for quoted posts is complex, skip for now
+                    "media": quoted_media,
                     "urls": quoted_urls,
                 }
 
@@ -277,21 +294,44 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
         "langs": langs,
     }
 
-    # Extract media info
+    # Extract media info from resolved embed view (post.embed has URLs, record.embed has blob refs)
     media = []
-    if hasattr(record, "embed") and record.embed:
-        embed = record.embed
-        if hasattr(embed, "images") and embed.images:
-            for img in embed.images:
-                media.append({
-                    "type": "image",
-                    "alt": getattr(img, "alt", ""),
-                })
-        elif hasattr(embed, "external") and embed.external:
+    if post_embed:
+        # Handle images (app.bsky.embed.images#view)
+        if hasattr(post_embed, "images") and post_embed.images:
+            for img in post_embed.images:
+                # post.embed images have thumb and fullsize URLs
+                thumb = getattr(img, "thumb", None)
+                fullsize = getattr(img, "fullsize", None)
+                if thumb or fullsize:
+                    media.append({
+                        "type": "photo",  # Match Twitter's format for renderMedia()
+                        "url": thumb or fullsize,  # Display URL (thumbnail)
+                        "expanded_url": fullsize or thumb,  # Click opens fullsize
+                        "alt": getattr(img, "alt", ""),
+                    })
+        # Handle recordWithMedia (quote with images) - images are in media.images
+        elif hasattr(post_embed, "media") and post_embed.media:
+            embed_media = post_embed.media
+            if hasattr(embed_media, "images") and embed_media.images:
+                for img in embed_media.images:
+                    thumb = getattr(img, "thumb", None)
+                    fullsize = getattr(img, "fullsize", None)
+                    if thumb or fullsize:
+                        media.append({
+                            "type": "photo",
+                            "url": thumb or fullsize,
+                            "expanded_url": fullsize or thumb,
+                            "alt": getattr(img, "alt", ""),
+                        })
+        # Handle external links (app.bsky.embed.external#view)
+        elif hasattr(post_embed, "external") and post_embed.external:
+            external = post_embed.external
             media.append({
                 "type": "link",
-                "uri": getattr(embed.external, "uri", ""),
-                "title": getattr(embed.external, "title", ""),
+                "uri": getattr(external, "uri", ""),
+                "title": getattr(external, "title", ""),
+                "thumb": getattr(external, "thumb", ""),  # External embeds can have thumbnails
             })
 
     # Build the normalized post
