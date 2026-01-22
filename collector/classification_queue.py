@@ -159,6 +159,37 @@ class ClassificationQueue:
         """Number of items dropped due to queue overflow."""
         return self._dropped_count
 
+    def get_pending_count(self, mode_id: str | None = None) -> int:
+        """
+        Get count of pending items, optionally filtered by mode.
+
+        Note: Filtering by mode requires iterating the queue, which is O(n).
+        Without a mode filter, returns the total pending count in O(1).
+        """
+        with self._lock:
+            if mode_id is None:
+                return len(self._pending)
+
+            # Need to count items with matching mode_id
+            # This requires peeking at the queue contents
+            count = 0
+            # Temporarily drain the queue to inspect items
+            items = []
+            while not self._queue.empty():
+                try:
+                    item = self._queue.get_nowait()
+                    items.append(item)
+                    if item.mode_id == mode_id:
+                        count += 1
+                except Exception:
+                    break
+
+            # Put items back
+            for item in items:
+                self._queue.put(item)
+
+            return count
+
     def _drop_old_normal_items(self, max_age: float = 300.0) -> int:
         """
         Drop NORMAL priority items older than max_age seconds.

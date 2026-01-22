@@ -33,6 +33,7 @@ from database import (
     get_platform_stats,
     get_prompt,
     get_prompt_responses_batch,
+    get_recently_classified_tweets,
     get_replies_for_tweet,
     get_retweets_batch,
     get_setting,
@@ -40,6 +41,7 @@ from database import (
     get_thread_context_batch,
     get_tweet,
     get_tweets_batch,
+    get_tweets_without_decision_filtered,
     invalidate_mode_decisions,
     list_modes,
     list_prompts,
@@ -58,6 +60,7 @@ from modes import (
     get_available_modes,
     get_mode_stats,
     get_mode_status_for_all_tweets,
+    run_prefilters_for_new_tweets,
 )
 from prefilters import PREFILTER_SCHEMAS, list_prefilter_schemas
 
@@ -266,15 +269,24 @@ def create_app(config=None):
         db_path = get_db_path()
         result = store_tweets(tweets, db_path)
 
+        # Run prefilters for newly inserted tweets
+        # Prefilters are cheap (no API calls), so we run them for ALL modes
+        # This gives instant decisions for prefilter-decidable posts
+        prefilter_stats = {}
+        if result.get("inserted_tweets"):
+            prefilter_stats = run_prefilters_for_new_tweets(
+                result["inserted_tweets"], db_path
+            )
+
         # Also store retweets if provided
         retweets = data.get("retweets", [])
         rt_result = {"inserted": 0, "duplicates": 0}
         if retweets:
             rt_result = store_retweets(retweets, db_path)
 
-        # Note: We don't queue tweets here. Classification happens on-demand
-        # when the extension calls /tweets/check with a specific mode.
-        # This avoids expensive LLM calls for modes that aren't being used.
+        # Note: LLM classification happens on-demand when the user views
+        # tweets (via /tweets/check or Read page). This avoids expensive
+        # LLM calls for modes that aren't being used.
 
         return jsonify(
             {
@@ -284,6 +296,7 @@ def create_app(config=None):
                 "duplicates": result["duplicates"],
                 "retweets_received": len(retweets),
                 "retweets_inserted": rt_result["inserted"],
+                "prefilter_decisions": sum(prefilter_stats.values()),
             }
         )
 
@@ -754,6 +767,125 @@ def create_app(config=None):
         from providers import list_providers
 
         return jsonify({"providers": list_providers()})
+
+    # =========================================================================
+    # Classification Trigger API
+    # =========================================================================
+
+    @app.route("/api/classify/trigger", methods=["POST"])
+    def api_classify_trigger():
+        """
+        Trigger classification for unclassified posts.
+
+        This endpoint is called by the Read page to initiate on-demand classification.
+        It first runs prefilters (instant decisions), then queues remaining posts
+        for LLM classification.
+
+        Request body:
+        {
+            "mode_id": "default",
+            "limit": 100,           # Max posts to classify
+            "max_age_hours": 48,    # Only posts from last N hours (optional)
+            "before": "ISO timestamp",  # Only posts older than this (optional)
+            "platform": "bluesky"   # Optional: filter by platform
+        }
+
+        Response:
+        {
+            "queued": 15,           # Number of posts queued for LLM
+            "already_decided": 85,  # Already have decisions (prefilter or LLM)
+            "prefilter_decided": 5  # Decided by prefilter in this request
+        }
+        """
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        mode_id = data.get("mode_id", "default")
+        limit = data.get("limit", 100)
+        max_age_hours = data.get("max_age_hours")
+        before = data.get("before")
+        platform = data.get("platform")
+
+        # Validate mode exists
+        mode = get_mode(mode_id, db_path)
+        if not mode:
+            return jsonify({"error": f"Mode not found: {mode_id}"}), 400
+
+        # Get unclassified tweets matching the filters
+        tweets = get_tweets_without_decision_filtered(
+            mode_id=mode_id,
+            limit=limit,
+            max_age_hours=max_age_hours,
+            before=before,
+            platform=platform,
+            db_path=db_path,
+        )
+
+        if not tweets:
+            return jsonify({
+                "queued": 0,
+                "already_decided": 0,
+                "prefilter_decided": 0,
+            })
+
+        # Run prefilters first (cheap, instant decisions)
+        prefilter_stats = run_prefilters_for_new_tweets(tweets, db_path)
+        prefilter_decided = prefilter_stats.get(mode_id, 0)
+
+        # Find tweets still needing LLM classification
+        # (those that prefilter didn't decide)
+        tweet_ids = [t["id"] for t in tweets]
+        decisions = get_mode_decisions_batch(tweet_ids, mode_id, db_path)
+        still_pending = [tid for tid in tweet_ids if tid not in decisions]
+
+        # Queue pending tweets for LLM classification
+        if still_pending:
+            prompt_id = mode["prompt_id"]
+            queue = get_classification_queue()
+            queue.enqueue_batch(still_pending, prompt_id, mode_id, Priority.HIGH)
+
+        return jsonify({
+            "queued": len(still_pending),
+            "already_decided": len(decisions) - prefilter_decided,
+            "prefilter_decided": prefilter_decided,
+        })
+
+    @app.route("/api/classify/status", methods=["GET"])
+    def api_classify_status():
+        """
+        Check classification progress for a mode.
+
+        Used for polling from the Read page to detect when new posts are classified.
+
+        Query params:
+        - mode_id: Which mode to check (default: "default")
+        - since: ISO timestamp - only return posts classified after this time
+
+        Response:
+        {
+            "pending_count": 5,              # Still in queue
+            "newly_classified": ["id1", "id2"],  # Classified since 'since' param
+            "has_pending": true              # Whether to keep polling
+        }
+        """
+        db_path = get_db_path()
+        mode_id = request.args.get("mode_id", "default")
+        since = request.args.get("since")
+
+        # Get queue status
+        queue = get_classification_queue()
+        pending_count = queue.get_pending_count(mode_id)
+
+        # Get newly classified tweets if 'since' provided
+        newly_classified: list[str] = []
+        if since:
+            newly_classified = get_recently_classified_tweets(mode_id, since, db_path)
+
+        return jsonify({
+            "pending_count": pending_count,
+            "newly_classified": newly_classified,
+            "has_pending": pending_count > 0,
+        })
 
     # =========================================================================
     # Settings API
