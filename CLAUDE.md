@@ -2,30 +2,29 @@
 
 ## Project Overview
 
-Aerie is a "sheltered" Twitter feed viewer that:
-1. Captures tweets from Twitter's API as you browse
+Aerie is a "sheltered" social feed viewer that:
+1. Captures posts from Twitter (via browser extension) and Bluesky (via poller)
 2. Stores them locally for LLM classification
-3. Hides unclassified/filtered tweets, showing only approved ones
+3. Hides unclassified/filtered posts, showing only approved ones
 
 The goal is to filter out ragebait, doomposting, and low-quality content before you see it.
 
 ## Architecture
 
 ```
-┌─────────────────────────┐
-│  Firefox Extension      │
-│  ├── background.js      │ ← Intercepts Twitter API responses, extracts tweets
-│  ├── content.js         │ ← Hides/shows tweets based on approval status
-│  └── content.css        │ ← Visual treatment for pending/approved/filtered
-└───────────┬─────────────┘
-            │ POST /tweets (captured)
-            │ POST /tweets/check (status lookup)
-            ▼
-┌─────────────────────────┐
-│  Collector Service      │
-│  (Flask + SQLite)       │
-│  └── tweets.db          │
-└───────────┬─────────────┘
+┌─────────────────────────┐     ┌─────────────────────────┐
+│  Firefox Extension      │     │  Bluesky Poller         │
+│  ├── background.js      │     │  └── bluesky_poller.py  │
+│  ├── content.js         │     │      (polls AT Protocol)│
+│  └── content.css        │     └───────────┬─────────────┘
+└───────────┬─────────────┘                 │
+            │ POST /tweets                   │ store_tweets()
+            │ POST /tweets/check             │
+            ▼                                ▼
+┌────────────────────────────────────────────┐
+│  Collector Service (Flask + SQLite)        │
+│  └── tweets.db (platform-agnostic schema)  │
+└───────────┬────────────────────────────────┘
             │
             ▼
 ┌─────────────────────────┐
@@ -56,11 +55,12 @@ Twitter's timeline data comes from `/graphql/.../HomeTimeline`, `/graphql/.../Ho
 The collector service includes web interfaces:
 
 - `/ui/label` - Labeling interface for creating ground truth data
-- `/ui/read` - Clean reading view for approved tweets
+- `/ui/read` - Clean reading view for approved posts
 - `/ui/modes` - Mode configuration UI for creating/editing/deleting classification modes
 - `/ui/prompts` - Prompt management UI for creating/editing classification prompts
+- `/ui/settings` - Settings for Bluesky credentials and other configuration
 
-Both label and read UIs show full tweet context (quoted tweets, thread ancestors, retweet attribution) and display mode-aware statistics. The Read page groups tweets into "conversation chains" - see `database.py` for the algorithm.
+Both label and read UIs show full post context (quoted posts, thread ancestors, retweet/repost attribution) and display mode-aware statistics. Posts are tagged with platform badges (X/bsky) and can be filtered by platform. The Read page groups posts into "conversation chains" - see `database.py` for the algorithm.
 
 ## Design Principle: Context Symmetry
 
@@ -80,20 +80,24 @@ If a human needs to click through to understand a tweet, an LLM would benefit fr
 
 ### Core Tables
 
-**tweets** - Raw tweet data captured from Twitter
-- `id` - Tweet ID (primary key)
-- `text` - Full tweet text (uses note_tweet for long-form content)
+**tweets** - Raw post data (Twitter and Bluesky)
+- `id` - Post ID (primary key). Format: raw ID for Twitter, `bsky:at://...` for Bluesky
+- `platform` - 'twitter' or 'bluesky'
+- `platform_metadata` - JSON with platform-specific data (CID, labels, etc.)
+- `text` - Full post text
 - `author_username`, `author_display_name`, `author_id`
 - `author_bio`, `author_following`, `author_blue_verified`, `author_followers_count`
-- `is_retweet`, `is_quote`, `is_promoted` - Tweet type flags
-- `quoted_tweet_id` - ID of quoted tweet (if quote tweet)
+- `is_retweet`, `is_quote`, `is_promoted` - Post type flags
+- `quoted_tweet_id` - ID of quoted post (if quote post)
 - `reply_to_tweet_id`, `reply_to_username` - Thread/reply info
-- ~~`classification_status`, `classification_result`~~ - DEPRECATED, use prompt_responses
+- `urls_json` - JSON array of URLs with expanded_url for link rendering
 
-**retweets** - Tracks who retweeted what (avoids duplicate tweet storage)
-- `original_tweet_id` - The original tweet being retweeted
+**retweets** - Tracks reposts/retweets (avoids duplicate post storage)
+- `original_tweet_id` - The original post being reposted
 - `retweeter_username`, `retweeter_display_name`, `retweeter_user_id`
-- `retweeted_at`, `captured_at`
+- `retweeted_at`, `captured_at`, `platform`
+
+**settings** - Key-value store for app configuration (e.g., Bluesky credentials)
 
 **prompts** - Versioned prompt definitions
 - `id` - Prompt ID (e.g., "binary_filter_v1", "topic_tagger_v1")
@@ -173,10 +177,13 @@ Tweet → Prefilter → (short-circuit?) → LLM → Response → Extractor → 
 | `/api/prompts` | GET/POST | List prompts or create new prompt |
 | `/api/prompts/<id>` | GET/PUT/DELETE | Get, update, or delete a prompt |
 | `/api/providers` | GET | List available LLM providers |
-| `/ui/label` | GET | Web UI for labeling tweets |
-| `/ui/read` | GET | Web UI for reading approved tweets |
+| `/api/settings/bluesky` | GET/POST/DELETE | Manage Bluesky credentials |
+| `/api/settings/bluesky/test` | POST | Test Bluesky connection |
+| `/ui/label` | GET | Web UI for labeling posts |
+| `/ui/read` | GET | Web UI for reading approved posts |
 | `/ui/modes` | GET | Web UI for managing classification modes |
 | `/ui/prompts` | GET | Web UI for managing prompts |
+| `/ui/settings` | GET | Web UI for settings (Bluesky config) |
 
 ## Running the Project
 
@@ -190,6 +197,22 @@ source .venv/bin/activate
 3. Browse twitter.com - tweets are captured automatically
 4. Check stats: `curl http://localhost:8080/stats`
 5. Run classifier: `cd collector && python classifier.py`
+
+### Bluesky Integration
+
+Configure credentials via `/ui/settings` or environment variables:
+```bash
+export BLUESKY_HANDLE="yourhandle.bsky.social"
+export BLUESKY_APP_PASSWORD="xxxx-xxxx-xxxx-xxxx"  # from bsky.app/settings/app-passwords
+```
+
+Poll your Bluesky timeline:
+```bash
+cd collector
+python bluesky_poller.py              # Poll once
+python bluesky_poller.py --watch      # Poll continuously (default: every 2 min)
+python bluesky_poller.py --verbose    # Show fetched posts
+```
 
 ## Parallel Development with Worktrees
 
