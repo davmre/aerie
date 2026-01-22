@@ -118,7 +118,7 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_tweets_author ON tweets(author_username);
             CREATE INDEX IF NOT EXISTS idx_tweets_reply_to ON tweets(reply_to_tweet_id);
             CREATE INDEX IF NOT EXISTS idx_tweets_quoted_tweet_id ON tweets(quoted_tweet_id);
-            CREATE INDEX IF NOT EXISTS idx_tweets_platform ON tweets(platform);
+            -- Note: idx_tweets_platform is created after platform column migration
 
             -- Track capture sessions for debugging/analytics
             CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -228,6 +228,11 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
         for col_name, col_type in new_columns:
             if col_name not in existing_columns:
                 conn.execute(f"ALTER TABLE tweets ADD COLUMN {col_name} {col_type}")
+
+        # Create platform index (after column is ensured to exist)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tweets_platform ON tweets(platform)"
+        )
 
         # Migration: Add config columns to modes table if they don't exist
         cursor = conn.execute("PRAGMA table_info(modes)")
