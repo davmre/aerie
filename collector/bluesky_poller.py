@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from atproto import Client
-from atproto_client.exceptions import UnauthorizedError
+from atproto_client.exceptions import RequestException, UnauthorizedError
 
 from database import (
     DEFAULT_DB_PATH,
@@ -66,6 +66,11 @@ def get_credentials(db_path: Path = DEFAULT_DB_PATH) -> tuple[str, str]:
     return handle, app_password
 
 
+class AuthenticationError(Exception):
+    """Non-recoverable authentication error. Do not retry."""
+    pass
+
+
 def create_client(db_path: Path = DEFAULT_DB_PATH) -> Client:
     """Create and authenticate a Bluesky client."""
     handle, app_password = get_credentials(db_path)
@@ -75,7 +80,16 @@ def create_client(db_path: Path = DEFAULT_DB_PATH) -> Client:
         client.login(handle, app_password)
         print(f"[Bluesky] Logged in as {handle}")
     except UnauthorizedError as e:
-        raise ValueError(f"Authentication failed: {e}. Check your credentials.") from e
+        raise AuthenticationError(f"Authentication failed: {e}. Check your credentials.") from e
+    except RequestException as e:
+        if e.response and e.response.status_code == 429:
+            reset_time = e.response.headers.get("ratelimit-reset", "unknown")
+            raise AuthenticationError(
+                f"Rate limited during authentication. "
+                f"Too many failed login attempts. Reset at timestamp: {reset_time}. "
+                f"Fix your credentials and wait for the rate limit to reset before retrying."
+            ) from e
+        raise
 
     return client
 
@@ -862,6 +876,11 @@ def main():
             limit=args.limit,
             verbose=args.verbose,
         )
+    except AuthenticationError as e:
+        # Auth errors are not recoverable by retrying - exit cleanly
+        print(f"[Error] {e}")
+        print("[Error] This is not recoverable by retrying. Fix credentials and restart manually.")
+        return 1
     except ValueError as e:
         print(f"[Error] {e}")
         return 1
