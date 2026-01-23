@@ -827,7 +827,7 @@ def main():
         "--db",
         type=Path,
         default=DEFAULT_DB_PATH,
-        help="Path to database (default: ../tweets.db)",
+        help="Path to database (default: AERIE_DB_PATH env var or ../tweets.db)",
     )
     parser.add_argument(
         "--watch",

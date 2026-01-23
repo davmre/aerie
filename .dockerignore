@@ -1,0 +1,38 @@
+# Git
+.git
+.gitignore
+
+# Python
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Database files (mounted as volume instead)
+tweets.db
+tweets.db-wal
+tweets.db-shm
+*.db
+
+# IDE
+.vscode
+.idea
+
+# Extension (not needed in container)
+extension/
+
+# Test artifacts
+htmlcov/
+.coverage
+
+# Local data directory (mounted as volume)
+data/
+
+# Documentation
+*.md
+!collector/*.md

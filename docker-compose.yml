@@ -1,0 +1,25 @@
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - ANTHROPIC_API_KEY
+      - GEMINI_API_KEY
+      - BLUESKY_HANDLE
+      - BLUESKY_APP_PASSWORD
+      - AERIE_DB_PATH=/app/data/tweets.db
+    restart: unless-stopped
+
+  poller:
+    build: .
+    command: ["python", "-m", "collector.bluesky_poller", "--watch", "--interval", "120"]
+    volumes:
+      - ./data:/app/data
+    environment:
+      - BLUESKY_HANDLE
+      - BLUESKY_APP_PASSWORD
+      - AERIE_DB_PATH=/app/data/tweets.db
+    restart: unless-stopped

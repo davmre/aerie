@@ -2,13 +2,17 @@
 
 import base64
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-DEFAULT_DB_PATH = Path(__file__).parent.parent / "tweets.db"
+# Database path can be configured via environment variable
+# Default: tweets.db in the parent directory of this file
+_env_db_path = os.environ.get("AERIE_DB_PATH")
+DEFAULT_DB_PATH = Path(_env_db_path) if _env_db_path else Path(__file__).parent.parent / "tweets.db"
 
 
 def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
