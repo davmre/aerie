@@ -28,6 +28,7 @@ from atproto_client.exceptions import UnauthorizedError
 
 from database import (
     DEFAULT_DB_PATH,
+    get_bluesky_post_ids,
     get_setting,
     init_database,
     store_retweets,
@@ -380,6 +381,241 @@ def normalize_post(feed_item: Any, client: Client) -> tuple[dict | None, dict | 
     return post_dict, repost_dict, quoted_post_dict
 
 
+def normalize_thread_view_post(thread_post: Any) -> dict | None:
+    """
+    Normalize a ThreadViewPost (from get_post_thread) to Aerie's tweet schema.
+
+    This is similar to normalize_post() but for thread context posts which
+    have a simpler structure (no repost handling needed).
+
+    Args:
+        thread_post: A ThreadViewPost from get_post_thread response
+
+    Returns:
+        Normalized post dict for tweets table, or None if should skip
+    """
+    # Handle blocked/notFound posts
+    if hasattr(thread_post, "py_type"):
+        type_str = str(thread_post.py_type)
+        if "notFoundPost" in type_str or "blockedPost" in type_str:
+            return None
+
+    # thread_post.post is a PostView
+    post = getattr(thread_post, "post", None)
+    if not post:
+        return None
+
+    record = getattr(post, "record", None)
+    if not record or not hasattr(record, "text"):
+        return None
+
+    # Build the Aerie post ID
+    post_id = f"bsky:{post.uri}"
+
+    # Extract author info
+    author = post.author
+    is_domain_verified = not author.handle.endswith(".bsky.social")
+
+    # Extract reply info
+    reply_to_id = None
+    root_uri = None
+    if hasattr(record, "reply") and record.reply:
+        if record.reply.parent:
+            reply_to_id = f"bsky:{record.reply.parent.uri}"
+        if record.reply.root:
+            root_uri = record.reply.root.uri
+
+    # Extract quote info (simplified - we don't recursively fetch quoted posts)
+    quoted_post_id = None
+    is_quote = False
+    post_embed = getattr(post, "embed", None)
+    if post_embed:
+        quoted_record = getattr(post_embed, "record", None)
+        if quoted_record and hasattr(quoted_record, "uri"):
+            is_quote = True
+            quoted_post_id = f"bsky:{quoted_record.uri}"
+
+    # Extract URL facets
+    urls = []
+    if hasattr(record, "facets") and record.facets:
+        text_bytes = record.text.encode("utf-8")
+        for facet in record.facets:
+            features = getattr(facet, "features", []) or []
+            for feature in features:
+                feature_type = getattr(feature, "py_type", None) or getattr(feature, "$type", "")
+                if "link" in str(feature_type).lower():
+                    uri = getattr(feature, "uri", None)
+                    if uri:
+                        index = getattr(facet, "index", None)
+                        if index:
+                            byte_start = getattr(index, "byte_start", 0)
+                            byte_end = getattr(index, "byte_end", len(text_bytes))
+                            display_text = text_bytes[byte_start:byte_end].decode("utf-8", errors="replace")
+                        else:
+                            display_text = uri
+                        urls.append({
+                            "url": display_text,
+                            "expanded_url": uri,
+                            "display_url": display_text,
+                        })
+
+    # Extract engagement metrics
+    like_count = getattr(post, "like_count", 0) or 0
+    repost_count = getattr(post, "repost_count", 0) or 0
+    reply_count = getattr(post, "reply_count", 0) or 0
+    quote_count = getattr(post, "quote_count", 0) or 0
+
+    # Extract labels
+    labels = []
+    if hasattr(post, "labels") and post.labels:
+        labels = [label.val for label in post.labels]
+
+    # Extract language tags
+    langs = getattr(record, "langs", None) or []
+
+    # Build platform metadata
+    platform_metadata = {
+        "cid": str(post.cid),
+        "root_uri": root_uri,
+        "labels": labels,
+        "langs": langs,
+    }
+
+    # Extract media info
+    media = []
+    if post_embed:
+        if hasattr(post_embed, "images") and post_embed.images:
+            for img in post_embed.images:
+                thumb = getattr(img, "thumb", None)
+                fullsize = getattr(img, "fullsize", None)
+                if thumb or fullsize:
+                    media.append({
+                        "type": "photo",
+                        "url": thumb or fullsize,
+                        "expanded_url": fullsize or thumb,
+                        "alt": getattr(img, "alt", ""),
+                    })
+        elif hasattr(post_embed, "media") and post_embed.media:
+            embed_media = post_embed.media
+            if hasattr(embed_media, "images") and embed_media.images:
+                for img in embed_media.images:
+                    thumb = getattr(img, "thumb", None)
+                    fullsize = getattr(img, "fullsize", None)
+                    if thumb or fullsize:
+                        media.append({
+                            "type": "photo",
+                            "url": thumb or fullsize,
+                            "expanded_url": fullsize or thumb,
+                            "alt": getattr(img, "alt", ""),
+                        })
+        elif hasattr(post_embed, "external") and post_embed.external:
+            external = post_embed.external
+            media.append({
+                "type": "link",
+                "uri": getattr(external, "uri", ""),
+                "title": getattr(external, "title", ""),
+                "thumb": getattr(external, "thumb", ""),
+            })
+
+    return {
+        "id": post_id,
+        "text": record.text,
+        "created_at": record.created_at,
+        "platform": PLATFORM,
+        "platform_metadata": platform_metadata,
+        "author": {
+            "id": author.did,
+            "username": author.handle,
+            "display_name": getattr(author, "display_name", None) or author.handle,
+            "verified": is_domain_verified,
+            "bio": getattr(author, "description", None),
+            "followers_count": getattr(author, "followers_count", None),
+            "following": None,
+        },
+        "metrics": {
+            "like_count": like_count,
+            "repost_count": repost_count,
+            "reply_count": reply_count,
+            "quote_count": quote_count,
+        },
+        "reply_to": {"tweet_id": reply_to_id} if reply_to_id else {},
+        "is_retweet": False,
+        "is_quote": is_quote,
+        "quoted_tweet_id": quoted_post_id,
+        "media": media,
+        "urls": urls,
+    }
+
+
+def fetch_thread_context(
+    client: Client,
+    reply_uri: str,
+    existing_ids: set[str],
+    max_depth: int = 50,
+    verbose: bool = False,
+) -> list[dict]:
+    """
+    Fetch the parent chain for a reply post.
+
+    Uses get_post_thread() to fetch the entire parent chain in one API call,
+    then walks up the chain until we reach a post we already have.
+
+    Args:
+        client: Authenticated Bluesky client
+        reply_uri: URI of the reply post (with or without 'bsky:' prefix)
+        existing_ids: Set of post IDs we already have (for deduplication)
+        max_depth: Maximum parent depth to fetch (passed to API)
+        verbose: Print debug output
+
+    Returns:
+        List of parent posts in chronological order (oldest first)
+    """
+    # Strip bsky: prefix if present
+    uri = reply_uri[5:] if reply_uri.startswith("bsky:") else reply_uri
+
+    try:
+        response = client.get_post_thread(uri=uri, parent_height=max_depth)
+    except Exception as e:
+        if verbose:
+            print(f"    [Warning] Failed to fetch thread for {uri}: {e}")
+        return []
+
+    thread = getattr(response, "thread", None)
+    if not thread:
+        return []
+
+    # Walk up thread.parent chain, collecting posts until we hit one we already have
+    parents = []
+    current = getattr(thread, "parent", None)
+
+    while current:
+        # Check for blocked/notFound posts
+        if hasattr(current, "py_type"):
+            type_str = str(current.py_type)
+            if "notFoundPost" in type_str or "blockedPost" in type_str:
+                break
+
+        post = getattr(current, "post", None)
+        if not post:
+            break
+
+        post_id = f"bsky:{post.uri}"
+
+        # Stop if we already have this post
+        if post_id in existing_ids:
+            break
+
+        normalized = normalize_thread_view_post(current)
+        if normalized:
+            parents.insert(0, normalized)  # Prepend for chronological order
+            existing_ids.add(post_id)  # Mark as seen to avoid re-fetching
+
+        # Move to next parent
+        current = getattr(current, "parent", None)
+
+    return parents
+
+
 def fetch_timeline(
     client: Client,
     limit: int = 50,
@@ -405,6 +641,7 @@ def poll_and_store(
     db_path: Path = DEFAULT_DB_PATH,
     limit: int = 50,
     verbose: bool = False,
+    fetch_threads: bool = True,
 ) -> dict:
     """
     Poll Bluesky timeline and store posts in the database.
@@ -414,6 +651,7 @@ def poll_and_store(
         db_path: Path to the database
         limit: Maximum number of posts to fetch
         verbose: Print detailed output
+        fetch_threads: If True, fetch parent posts for replies (thread context)
 
     Returns:
         Stats dict with counts of inserted/duplicates
@@ -453,12 +691,65 @@ def poll_and_store(
                 print(f"  [Warning] Failed to normalize post: {e}")
             skipped += 1
 
-    # Store quoted posts first (so foreign key references work)
-    quoted_result = store_tweets(quoted_posts, db_path) if quoted_posts else {"inserted": 0, "duplicates": 0}
+    # Fetch thread context for replies with missing parents
+    thread_context_posts: list[dict] = []
+    if fetch_threads:
+        # Collect reply URIs that point to posts we don't have
+        reply_uris = [
+            p["reply_to"]["tweet_id"]
+            for p in posts
+            if p.get("reply_to", {}).get("tweet_id")
+        ]
+
+        if reply_uris:
+            # Build set of existing IDs (from DB + current batch)
+            existing_ids = get_bluesky_post_ids(db_path)
+            existing_ids.update(p["id"] for p in posts)
+            existing_ids.update(p["id"] for p in quoted_posts)
+
+            # Fetch thread context for each unique missing parent
+            fetched_uris: set[str] = set()
+            for uri in reply_uris:
+                if uri not in existing_ids and uri not in fetched_uris:
+                    fetched_uris.add(uri)
+                    parents = fetch_thread_context(
+                        client, uri, existing_ids, verbose=verbose
+                    )
+                    if parents:
+                        thread_context_posts.extend(parents)
+                        if verbose:
+                            for p in parents:
+                                author = p["author"]["username"]
+                                text_preview = p["text"][:40].replace("\n", " ")
+                                print(f"  [thread] @{author}: {text_preview}...")
+                    # Brief pause between API calls for rate limiting
+                    time.sleep(0.1)
+
+    # Store in order: thread context -> quoted -> main posts
+    thread_result = (
+        store_tweets(thread_context_posts, db_path)
+        if thread_context_posts
+        else {"inserted": 0, "duplicates": 0}
+    )
+
+    # Store quoted posts (so foreign key references work)
+    quoted_result = (
+        store_tweets(quoted_posts, db_path)
+        if quoted_posts
+        else {"inserted": 0, "duplicates": 0}
+    )
 
     # Store main posts
-    post_result = store_tweets(posts, db_path) if posts else {"inserted": 0, "duplicates": 0}
-    repost_result = store_retweets(reposts, db_path) if reposts else {"inserted": 0, "duplicates": 0}
+    post_result = (
+        store_tweets(posts, db_path)
+        if posts
+        else {"inserted": 0, "duplicates": 0}
+    )
+    repost_result = (
+        store_retweets(reposts, db_path)
+        if reposts
+        else {"inserted": 0, "duplicates": 0}
+    )
 
     return {
         "posts_fetched": len(feed),
@@ -466,6 +757,8 @@ def poll_and_store(
         "posts_duplicates": post_result["duplicates"],
         "quoted_posts_inserted": quoted_result["inserted"],
         "quoted_posts_duplicates": quoted_result["duplicates"],
+        "thread_context_inserted": thread_result["inserted"],
+        "thread_context_duplicates": thread_result["duplicates"],
         "reposts_inserted": repost_result["inserted"],
         "reposts_duplicates": repost_result["duplicates"],
         "skipped": skipped,
@@ -502,6 +795,8 @@ def run_poller(
             f"[Bluesky] Fetched {stats['posts_fetched']} posts: "
             f"{stats['posts_inserted']} new, {stats['posts_duplicates']} existing"
         )
+        if stats.get("thread_context_inserted", 0) > 0:
+            print(f"[Bluesky] Fetched {stats['thread_context_inserted']} thread context posts")
         if stats["quoted_posts_inserted"] > 0:
             print(f"[Bluesky] Stored {stats['quoted_posts_inserted']} quoted posts")
         if stats["reposts_inserted"] > 0:

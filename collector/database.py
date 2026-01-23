@@ -1298,6 +1298,15 @@ def get_platform_stats(db_path: Path = DEFAULT_DB_PATH) -> dict[str, int]:
         return {row["platform"]: row["count"] for row in rows}
 
 
+def get_bluesky_post_ids(db_path: Path = DEFAULT_DB_PATH) -> set[str]:
+    """Get all Bluesky post IDs in the database for efficient existence checks."""
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id FROM tweets WHERE platform = 'bluesky'"
+        ).fetchall()
+        return {row["id"] for row in rows}
+
+
 # =============================================================================
 # Settings
 # =============================================================================
