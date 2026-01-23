@@ -584,8 +584,21 @@ def fetch_thread_context(
     if not thread:
         return []
 
-    # Walk up thread.parent chain, collecting posts until we hit one we already have
+    # First, include the post we queried (the immediate parent of our reply)
+    # This is thread itself, not thread.parent
     parents = []
+
+    # Check if the queried post should be included
+    thread_post = getattr(thread, "post", None)
+    if thread_post:
+        thread_post_id = f"bsky:{thread_post.uri}"
+        if thread_post_id not in existing_ids:
+            normalized = normalize_thread_view_post(thread)
+            if normalized:
+                parents.append(normalized)
+                existing_ids.add(thread_post_id)
+
+    # Walk up thread.parent chain, collecting ancestor posts
     current = getattr(thread, "parent", None)
 
     while current:

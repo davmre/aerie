@@ -286,13 +286,14 @@ class TestFetchThreadContext:
             existing_ids,
         )
 
-        assert len(parents) == 2
-        # Should be chronological order (oldest first)
+        assert len(parents) == 3
+        # Should be chronological order (oldest first): grandparent, parent, then queried post
         assert parents[0]["text"] == "Grandparent post"
         assert parents[1]["text"] == "Parent post"
+        assert parents[2]["text"] == "Reply post"
 
     def test_stops_at_existing_post(self):
-        """Should stop walking chain when existing post is found."""
+        """Should stop walking ancestors when existing post is found, but still return queried post."""
         parent_author = MockAuthor("parent.bsky.social", "did:plc:parent")
         parent_record = MockRecord("Parent post")
         parent_view = MockPostView(
@@ -327,7 +328,37 @@ class TestFetchThreadContext:
             existing_ids,
         )
 
-        # Should return empty since we already have the parent
+        # Should return just the queried post (reply), not the parent we already have
+        assert len(parents) == 1
+        assert parents[0]["text"] == "Reply post"
+
+    def test_skips_already_existing_queried_post(self):
+        """Should return empty if queried post is already in existing_ids."""
+        reply_author = MockAuthor("reply.bsky.social", "did:plc:reply")
+        reply_record = MockRecord("Reply post")
+        reply_view = MockPostView(
+            uri="at://did:plc:reply/app.bsky.feed.post/reply",
+            cid="bafyreireply",
+            author=reply_author,
+            record=reply_record,
+        )
+        reply_thread = MockThreadViewPost(reply_view, parent=None)
+
+        mock_response = MagicMock()
+        mock_response.thread = reply_thread
+
+        mock_client = MagicMock()
+        mock_client.get_post_thread.return_value = mock_response
+
+        # Mark the queried post itself as already existing
+        existing_ids = {"bsky:at://did:plc:reply/app.bsky.feed.post/reply"}
+        parents = fetch_thread_context(
+            mock_client,
+            "bsky:at://did:plc:reply/app.bsky.feed.post/reply",
+            existing_ids,
+        )
+
+        # Should return empty since we already have the queried post
         assert len(parents) == 0
 
     def test_handles_api_error(self):
@@ -345,7 +376,7 @@ class TestFetchThreadContext:
         assert parents == []
 
     def test_handles_blocked_parent(self):
-        """Should stop chain at blocked post."""
+        """Should return queried post but stop at blocked ancestor."""
         blocked = MockBlockedPost()
 
         reply_author = MockAuthor("reply.bsky.social", "did:plc:reply")
@@ -371,8 +402,9 @@ class TestFetchThreadContext:
             existing_ids,
         )
 
-        # Should return empty since parent is blocked
-        assert len(parents) == 0
+        # Should return just the queried post; parent is blocked so we stop there
+        assert len(parents) == 1
+        assert parents[0]["text"] == "Reply post"
 
     def test_strips_bsky_prefix(self):
         """Should handle URIs with or without bsky: prefix."""
