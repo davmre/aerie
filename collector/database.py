@@ -278,26 +278,39 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
 def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
     """
     Store tweets in the database, deduplicating by ID.
-    Returns stats about the operation.
+
+    Returns:
+        {
+            "inserted": int - count of newly inserted tweets,
+            "duplicates": int - count of duplicates/updates,
+            "inserted_tweets": list[dict] - full tweet dicts that were actually inserted
+        }
     """
     if not tweets:
-        return {"inserted": 0, "duplicates": 0}
+        return {"inserted": 0, "duplicates": 0, "inserted_tweets": []}
 
     inserted = 0
     duplicates = 0
+    inserted_tweets = []
 
     with transaction(db_path) as conn:
-        # Pre-check which IDs already exist for accurate counting
-        # (rowcount is unreliable with ON CONFLICT DO UPDATE)
+        # First, check which tweet IDs already exist (for accurate insert tracking)
         tweet_ids = [t["id"] for t in tweets]
-        placeholders = ",".join("?" * len(tweet_ids))
-        existing = conn.execute(
-            f"SELECT id FROM tweets WHERE id IN ({placeholders})", tweet_ids
-        ).fetchall()
-        existing_ids = {row[0] for row in existing}
+        if tweet_ids:
+            placeholders = ",".join("?" * len(tweet_ids))
+            existing_rows = conn.execute(
+                f"SELECT id FROM tweets WHERE id IN ({placeholders})",
+                tweet_ids,
+            ).fetchall()
+            existing_ids = {row["id"] for row in existing_rows}
+        else:
+            existing_ids = set()
 
         for tweet in tweets:
             try:
+                tweet_id = tweet["id"]
+                is_new = tweet_id not in existing_ids
+
                 author = tweet.get("author", {})
                 text = tweet["text"]
                 # Extract platform-specific data
@@ -330,7 +343,7 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         is_promoted = MAX(tweets.is_promoted, excluded.is_promoted)
                 """,
                     (
-                        tweet["id"],
+                        tweet_id,
                         text,
                         parse_twitter_date(tweet.get("created_at")),
                         tweet.get("captured_at", datetime.utcnow().isoformat()),
@@ -365,16 +378,17 @@ def store_tweets(tweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
                         json.dumps(tweet.get("mentions", [])),
                     ),
                 )
-                # Count based on pre-checked existing IDs
-                if tweet["id"] in existing_ids:
-                    duplicates += 1
-                else:
+
+                if is_new:
                     inserted += 1
+                    inserted_tweets.append(tweet)
+                else:
+                    duplicates += 1
             except sqlite3.IntegrityError:
                 # Shouldn't happen with ON CONFLICT, but just in case
                 duplicates += 1
 
-    return {"inserted": inserted, "duplicates": duplicates}
+    return {"inserted": inserted, "duplicates": duplicates, "inserted_tweets": inserted_tweets}
 
 
 def store_retweets(retweets: list[dict], db_path: Path = DEFAULT_DB_PATH) -> dict:
@@ -1186,6 +1200,86 @@ def get_tweets_without_decision(
             (mode_id, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+
+def get_tweets_without_decision_filtered(
+    mode_id: str,
+    limit: int = 100,
+    max_age_hours: int | None = None,
+    before: str | None = None,
+    platform: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+    """
+    Get tweets that don't have a cached decision for the given mode,
+    with optional time and platform filtering.
+
+    Args:
+        mode_id: Mode ID to check decisions for
+        limit: Maximum number of tweets to return
+        max_age_hours: Only return tweets from the last N hours (by created_at)
+        before: Only return tweets created before this ISO timestamp
+        platform: Filter by platform ('twitter', 'bluesky')
+        db_path: Database path
+
+    Returns:
+        List of tweet dicts without decisions, ordered by created_at DESC
+    """
+    with transaction(db_path) as conn:
+        query = """
+            SELECT t.* FROM tweets t
+            LEFT JOIN mode_decisions md
+                ON t.id = md.tweet_id AND md.mode_id = ?
+            WHERE md.tweet_id IS NULL
+        """
+        params: list = [mode_id]
+
+        if max_age_hours is not None:
+            # SQLite datetime arithmetic: datetime('now', '-N hours')
+            query += " AND t.created_at >= datetime('now', ?)"
+            params.append(f"-{max_age_hours} hours")
+
+        if before is not None:
+            query += " AND t.created_at < ?"
+            params.append(before)
+
+        if platform is not None:
+            query += " AND t.platform = ?"
+            params.append(platform)
+
+        query += " ORDER BY t.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_recently_classified_tweets(
+    mode_id: str,
+    since: str,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[str]:
+    """
+    Get tweet IDs that were classified (got a decision) after a given timestamp.
+
+    Args:
+        mode_id: Mode ID to check decisions for
+        since: ISO timestamp - only return tweets classified after this time
+        db_path: Database path
+
+    Returns:
+        List of tweet IDs that were classified since the given timestamp
+    """
+    with transaction(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT tweet_id FROM mode_decisions
+            WHERE mode_id = ? AND computed_at > ?
+            ORDER BY computed_at DESC
+            """,
+            (mode_id, since),
+        ).fetchall()
+        return [row["tweet_id"] for row in rows]
 
 
 def get_all_tweet_ids(db_path: Path = DEFAULT_DB_PATH) -> list[str]:

@@ -12,6 +12,7 @@ from database import (
     DEFAULT_DB_PATH,
     get_cached_decision_stats,
     get_mode,
+    get_mode_decisions_batch,
     get_prompt_response,
     get_prompt_responses_batch,
     get_tweets_batch,
@@ -524,6 +525,83 @@ def compute_mode_decisions_for_tweets(
                 continue  # Leave as pending on error
 
     # Store all decisions
+    if decisions_to_store:
+        store_mode_decisions_batch(decisions_to_store, db_path)
+
+    return results
+
+
+def run_prefilters_for_new_tweets(
+    tweets: list[dict],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, int]:
+    """
+    Run prefilters for all modes on newly collected tweets.
+
+    Prefilters are cheap (no API calls), so we run them for ALL modes
+    at collection time. This gives instant decisions for many posts.
+
+    Args:
+        tweets: List of tweet dicts (as stored by store_tweets)
+        db_path: Database path
+
+    Returns:
+        Dict mapping mode_id -> count of decisions cached
+    """
+    if not tweets:
+        return {}
+
+    all_modes = list_modes(db_path)
+    if not all_modes:
+        return {}
+
+    # Get tweet IDs for checking existing decisions
+    tweet_ids = [t["id"] for t in tweets]
+    tweets_by_id = {t["id"]: t for t in tweets}
+
+    results: dict[str, int] = {}
+    decisions_to_store = []
+
+    for mode in all_modes:
+        mode_id = mode["id"]
+        results[mode_id] = 0
+
+        # Skip modes without prefilters - they'll need LLM classification
+        if not mode.get("prefilter"):
+            continue
+
+        # Parse prefilter config
+        prefilter_config = _parse_config(mode.get("prefilter_config"))
+        prefilter_fn = get_prefilter_with_config(mode["prefilter"], prefilter_config)
+
+        if not prefilter_fn:
+            continue
+
+        # Check which tweets already have decisions for this mode
+        existing_decisions = get_mode_decisions_batch(tweet_ids, mode_id, db_path)
+
+        for tweet_id in tweet_ids:
+            # Skip if already has a decision
+            if tweet_id in existing_decisions:
+                continue
+
+            tweet = tweets_by_id[tweet_id]
+
+            # Run prefilter
+            prefilter_result = prefilter_fn(tweet)
+
+            if prefilter_result is not None:
+                # Prefilter made a decision - cache it
+                decision = "approved" if prefilter_result else "filtered"
+                decisions_to_store.append({
+                    "tweet_id": tweet_id,
+                    "mode_id": mode_id,
+                    "decision": decision,
+                    "source": "prefilter",
+                })
+                results[mode_id] += 1
+
+    # Store all decisions in one batch
     if decisions_to_store:
         store_mode_decisions_batch(decisions_to_store, db_path)
 

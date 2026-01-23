@@ -281,6 +281,34 @@
         text-align: center;
         padding: 20px;
     }
+
+    /* Classification status indicator */
+    .classification-status {
+        max-width: 600px;
+        margin: 0 auto 16px;
+        padding: 8px 16px;
+        background: var(--bg-nested);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.9rem;
+        color: var(--accent);
+    }
+
+    .spinner-small {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--accent);
+        border-top-color: transparent;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
 </style>
 {% endblock %}
 
@@ -308,6 +336,12 @@
 </div>
 
 <div class="mode-stats" id="mode-stats"></div>
+
+<!-- Classification status indicator -->
+<div class="classification-status" id="classification-status" style="display: none;">
+    <span class="spinner-small"></span>
+    <span id="classification-status-text">Classifying posts...</span>
+</div>
 
 <div id="chains-container">
     <div class="loading">Loading tweets...</div>
@@ -616,20 +650,152 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-// Infinite scroll
-window.addEventListener('scroll', () => {
-    if (!hasMore || loading) return;
-    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
-        loadMore();
+// =========================================================================
+// Classification triggering and polling
+// =========================================================================
+
+let pollInterval = null;
+let lastPollTime = null;
+const classificationStatus = document.getElementById('classification-status');
+const classificationStatusText = document.getElementById('classification-status-text');
+
+async function triggerClassification(options = {}) {
+    const params = {
+        mode_id: modeSelect.value,
+        limit: options.limit || 100,
+        max_age_hours: options.max_age_hours || 48,
+    };
+
+    if (platformSelect.value !== 'all') {
+        params.platform = platformSelect.value;
+    }
+
+    // Support for scroll-triggered classification of older posts
+    if (options.before) {
+        params.before = options.before;
+    }
+
+    try {
+        const resp = await fetch('/api/classify/trigger', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(params)
+        });
+        const data = await resp.json();
+
+        // If there are queued items, start polling
+        if (data.queued > 0) {
+            showClassificationStatus(`Classifying ${data.queued} posts...`);
+            startPolling();
+        }
+
+        return data;
+    } catch (err) {
+        console.error('Error triggering classification:', err);
+        return { queued: 0, already_decided: 0, prefilter_decided: 0 };
+    }
+}
+
+function showClassificationStatus(text) {
+    classificationStatusText.textContent = text;
+    classificationStatus.style.display = 'flex';
+}
+
+function hideClassificationStatus() {
+    classificationStatus.style.display = 'none';
+}
+
+function startPolling() {
+    if (pollInterval) return;
+    lastPollTime = new Date().toISOString();
+
+    pollInterval = setInterval(async () => {
+        try {
+            const resp = await fetch(`/api/classify/status?mode_id=${modeSelect.value}&since=${lastPollTime}`);
+            const data = await resp.json();
+
+            if (data.newly_classified && data.newly_classified.length > 0) {
+                // Refresh the chain list to include new posts
+                await loadChains(false);  // false = replace, not append
+                updateStats(modeSelect.value);
+                lastPollTime = new Date().toISOString();
+            }
+
+            // Update status text
+            if (data.has_pending) {
+                showClassificationStatus(`Classifying ${data.pending_count} posts...`);
+            } else {
+                stopPolling();
+            }
+        } catch (err) {
+            console.error('Polling error:', err);
+        }
+    }, 3000);  // Poll every 3 seconds
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+    hideClassificationStatus();
+}
+
+// Get oldest displayed timestamp for scroll-triggered classification
+function getOldestDisplayedTimestamp() {
+    const chains = document.querySelectorAll('.chain');
+    if (chains.length === 0) return null;
+
+    // Find the created_at of the last tweet in the last chain
+    // We need to store timestamps in data attributes
+    const lastChain = chains[chains.length - 1];
+    const lastTweetMeta = lastChain.querySelector('.chain-tweet:last-child .tweet-link');
+    // Fall back to current time minus 48 hours if we can't find it
+    return null;  // Let the server use max_age_hours
+}
+
+// Infinite scroll with classification trigger
+window.addEventListener('scroll', async () => {
+    if (loading) return;
+
+    const nearBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 500;
+
+    if (nearBottom) {
+        if (hasMore) {
+            // Normal case: load more already-classified chains
+            loadMore();
+        } else if (!pollInterval) {
+            // No more classified posts - trigger classification of older posts
+            loading = true;
+            const result = await triggerClassification({
+                limit: 50,
+                max_age_hours: 168,  // 1 week
+            });
+            if (result.queued > 0) {
+                // Polling will refresh the list when done
+            }
+            loading = false;
+        }
     }
 });
 
-modeSelect.addEventListener('change', () => { loadChains(); updateStats(modeSelect.value); });
-platformSelect.addEventListener('change', () => loadChains());
+// Event handlers with classification triggering
+modeSelect.addEventListener('change', () => {
+    stopPolling();
+    loadChains();
+    updateStats(modeSelect.value);
+    triggerClassification();
+});
+platformSelect.addEventListener('change', () => {
+    stopPolling();
+    loadChains();
+    triggerClassification();
+});
 sortSelect.addEventListener('change', () => loadChains());
 
-// Initial load
+// Initial load with classification trigger
 loadChains();
 updateStats(modeSelect.value);
+triggerClassification();
 </script>
 {% endblock %}
