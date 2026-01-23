@@ -76,14 +76,31 @@ def format_tweets_batch(tweets: list[dict]) -> str:
     return "\n\n".join(formatted)
 
 
-def build_batch_prompt(base_prompt: str) -> str:
+def build_batch_prompt(base_prompt: str, context_text: str | None = None) -> str:
     """
     Wrap the base prompt with batch classification instructions.
 
     The base prompt contains the classification criteria. We add instructions
     for handling multiple tweets and the expected response format.
+
+    Args:
+        base_prompt: The core classification prompt text
+        context_text: Optional situational context to prepend
+
+    Returns:
+        The complete system prompt for batch classification
     """
-    return f"""{base_prompt}
+    # Add context prefix if provided
+    context_section = ""
+    if context_text:
+        context_section = f"""CURRENT SITUATIONAL CONTEXT:
+{context_text}
+
+---
+
+"""
+
+    return f"""{context_section}{base_prompt}
 
 ---
 
@@ -93,11 +110,13 @@ IMPORTANT: Respond with ONLY a JSON array. Each element must have:
 - "id": the tweet number (1, 2, 3, etc.)
 - "approved": boolean (true to show, false to hide)
 - "reason": brief explanation (1 sentence)
+- "needs_context": boolean (optional, true if you need more context about the topic/author to make a good decision)
 
 Example response format:
 [
   {{"id": 1, "approved": true, "reason": "Informative tech discussion"}},
-  {{"id": 2, "approved": false, "reason": "Engagement bait"}}
+  {{"id": 2, "approved": false, "reason": "Engagement bait"}},
+  {{"id": 3, "approved": true, "reason": "Unclear reference", "needs_context": true}}
 ]"""
 
 
@@ -159,6 +178,7 @@ def classify_and_store_batch(
     provider_name: str | None = None,
     model: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
+    context_id: str | None = None,
 ) -> dict[str, dict]:
     """
     Classify tweets and store the results in prompt_responses.
@@ -172,6 +192,7 @@ def classify_and_store_batch(
         provider_name: LLM provider ("anthropic", "gemini"). Defaults to "anthropic".
         model: Model to use (defaults to provider's default model).
         db_path: Path to the database.
+        context_id: Optional context ID to associate with classifications.
 
     Returns the classification results.
     """
@@ -185,6 +206,8 @@ def classify_and_store_batch(
 
     # Store each result
     for tweet_id, response in results.items():
-        store_prompt_response(tweet_id, prompt_id, actual_model, response, db_path)
+        store_prompt_response(
+            tweet_id, prompt_id, actual_model, response, db_path, context_id=context_id
+        )
 
     return results

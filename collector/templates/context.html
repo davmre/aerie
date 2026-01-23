@@ -1,0 +1,645 @@
+{% extends "base.html" %}
+
+{% block title %}Context - Aerie{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .context-container {
+        margin-bottom: 30px;
+    }
+
+    .context-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .context-header h2 {
+        margin: 0;
+        color: var(--text-heading);
+    }
+
+    .context-actions {
+        display: flex;
+        gap: 10px;
+    }
+
+    .context-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-secondary);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .context-card.active {
+        border-color: var(--accent);
+    }
+
+    .context-meta {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+
+    .context-meta-left {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+    }
+
+    .context-id {
+        font-family: monospace;
+        background: var(--bg-button);
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+
+    .context-text {
+        white-space: pre-wrap;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        color: var(--text-primary);
+        max-height: 400px;
+        overflow-y: auto;
+    }
+
+    .context-text.collapsed {
+        max-height: 150px;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .context-text.collapsed::after {
+        content: '';
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 50px;
+        background: linear-gradient(transparent, var(--bg-card));
+    }
+
+    .context-empty {
+        text-align: center;
+        padding: 40px;
+        color: var(--text-tertiary);
+    }
+
+    .context-empty p {
+        margin-bottom: 20px;
+    }
+
+    /* Editor */
+    .context-editor {
+        display: none;
+    }
+
+    .context-editor.active {
+        display: block;
+    }
+
+    .context-textarea {
+        width: 100%;
+        min-height: 300px;
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border-input);
+        background: var(--bg-input);
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 0.95rem;
+        line-height: 1.6;
+        resize: vertical;
+    }
+
+    .context-textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+
+    .editor-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 12px;
+    }
+
+    /* History */
+    .history-section {
+        margin-top: 40px;
+    }
+
+    .history-section h3 {
+        color: var(--text-heading);
+        margin-bottom: 16px;
+        font-size: 1.1rem;
+    }
+
+    .history-item {
+        background: var(--bg-card);
+        border: 1px solid var(--border-secondary);
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+        cursor: pointer;
+        transition: border-color 0.15s;
+    }
+
+    .history-item:hover {
+        border-color: var(--border-tertiary);
+    }
+
+    .history-item.current {
+        border-color: var(--accent);
+    }
+
+    .history-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+    }
+
+    .history-meta {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+    }
+
+    .history-preview {
+        font-size: 0.9rem;
+        color: var(--text-tertiary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .source-badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        text-transform: uppercase;
+    }
+
+    .source-auto {
+        background: rgba(100, 150, 255, 0.15);
+        color: #6496ff;
+    }
+
+    .source-manual {
+        background: rgba(100, 200, 150, 0.15);
+        color: #64c896;
+    }
+
+    .current-badge {
+        background: var(--accent-approved-bg);
+        color: var(--accent-approved-text);
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 500;
+    }
+
+    /* Stats */
+    .context-stats {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+    }
+
+    .context-stats span {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    /* Loading state */
+    .loading-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--bg-modal-overlay);
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .loading-overlay.active {
+        display: flex;
+    }
+
+    .loading-spinner {
+        background: var(--bg-card);
+        padding: 30px 50px;
+        border-radius: 8px;
+        text-align: center;
+        color: var(--text-primary);
+    }
+
+    .spinner {
+        display: inline-block;
+        width: 30px;
+        height: 30px;
+        border: 3px solid var(--border-tertiary);
+        border-radius: 50%;
+        border-top-color: var(--accent);
+        animation: spin 1s linear infinite;
+        margin-bottom: 10px;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Refresh options */
+    .refresh-options {
+        display: none;
+        background: var(--bg-card);
+        border: 1px solid var(--border-secondary);
+        border-radius: 8px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+
+    .refresh-options.active {
+        display: block;
+    }
+
+    .refresh-options h4 {
+        margin: 0 0 16px 0;
+        color: var(--text-heading);
+    }
+
+    .option-row {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 16px;
+        align-items: center;
+    }
+
+    .option-row label {
+        color: var(--text-secondary);
+        min-width: 100px;
+    }
+
+    .option-row input, .option-row select {
+        flex: 1;
+        max-width: 200px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="context-container">
+    <div class="context-header">
+        <h2>Situational Context</h2>
+        <div class="context-actions">
+            <button class="btn" id="editBtn" onclick="toggleEditor()">Edit</button>
+            <button class="btn" id="refreshOptionsBtn" onclick="toggleRefreshOptions()">Refresh with LLM</button>
+            <button class="btn" id="clearBtn" onclick="clearContext()">Clear</button>
+        </div>
+    </div>
+
+    <div class="context-stats" id="contextStats">
+        <!-- Filled by JS -->
+    </div>
+
+    <!-- Refresh Options Panel -->
+    <div class="refresh-options" id="refreshOptions">
+        <h4>Refresh Options</h4>
+        <div class="option-row">
+            <label>Provider:</label>
+            <select id="refreshProvider">
+                <option value="">Default (Anthropic)</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option>
+            </select>
+        </div>
+        <div class="option-row">
+            <label>Hours:</label>
+            <input type="number" id="refreshHours" value="48" min="1" max="168">
+        </div>
+        <div class="option-row">
+            <label>Token Limit:</label>
+            <input type="number" id="refreshTokenLimit" value="2000" min="500" max="8000">
+        </div>
+        <div class="option-row">
+            <button class="btn btn-primary" onclick="refreshContext()">Generate Context</button>
+            <button class="btn" onclick="toggleRefreshOptions()">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Current Context Card -->
+    <div class="context-card active" id="currentContext">
+        <div class="context-meta">
+            <div class="context-meta-left">
+                <span class="context-id" id="contextId">No context</span>
+                <span id="contextTokens"></span>
+                <span id="contextSource"></span>
+            </div>
+            <span id="contextDate"></span>
+        </div>
+        <div class="context-text" id="contextText">
+            <div class="context-empty">
+                <p>No context set yet.</p>
+                <p>Context helps the LLM classifier understand current events and discussions when evaluating posts.</p>
+                <button class="btn" onclick="toggleEditor()">Create Context</button>
+                <button class="btn" onclick="toggleRefreshOptions()">Generate with LLM</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Editor -->
+    <div class="context-editor" id="contextEditor">
+        <textarea class="context-textarea" id="contextTextarea" placeholder="Enter context text...
+
+Example:
+- Tech community discussing new AI models released this week
+- Ongoing debate about open source vs closed source AI
+- NBA playoffs in progress
+- ..." ></textarea>
+        <div class="editor-actions">
+            <button class="btn" onclick="toggleEditor()">Cancel</button>
+            <button class="btn btn-primary" onclick="saveContext()">Save Context</button>
+        </div>
+    </div>
+
+    <!-- History Section -->
+    <div class="history-section">
+        <h3>Context History</h3>
+        <div id="historyList">
+            <!-- Filled by JS -->
+        </div>
+    </div>
+</div>
+
+<!-- Loading Overlay -->
+<div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-spinner">
+        <div class="spinner"></div>
+        <div>Generating context with LLM...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let currentContextId = null;
+    let isEditing = false;
+
+    async function loadContext() {
+        try {
+            const [contextRes, historyRes] = await Promise.all([
+                fetch('/api/context'),
+                fetch('/api/context/history?limit=10')
+            ]);
+
+            const contextData = await contextRes.json();
+            const historyData = await historyRes.json();
+
+            renderCurrentContext(contextData.context);
+            renderHistory(historyData.contexts, historyData.current_id);
+        } catch (e) {
+            console.error('Failed to load context:', e);
+        }
+    }
+
+    function renderCurrentContext(context) {
+        const statsEl = document.getElementById('contextStats');
+        const idEl = document.getElementById('contextId');
+        const tokensEl = document.getElementById('contextTokens');
+        const sourceEl = document.getElementById('contextSource');
+        const dateEl = document.getElementById('contextDate');
+        const textEl = document.getElementById('contextText');
+
+        if (!context) {
+            currentContextId = null;
+            statsEl.innerHTML = '<span>No context configured</span>';
+            idEl.textContent = 'No context';
+            tokensEl.textContent = '';
+            sourceEl.innerHTML = '';
+            dateEl.textContent = '';
+            textEl.innerHTML = `
+                <div class="context-empty">
+                    <p>No context set yet.</p>
+                    <p>Context helps the LLM classifier understand current events and discussions when evaluating posts.</p>
+                    <button class="btn" onclick="toggleEditor()">Create Context</button>
+                    <button class="btn" onclick="toggleRefreshOptions()">Generate with LLM</button>
+                </div>
+            `;
+            return;
+        }
+
+        currentContextId = context.id;
+
+        // Stats
+        const tokens = context.token_count || Math.round(context.text.length / 4);
+        const chars = context.text.length;
+        statsEl.innerHTML = `
+            <span>~${tokens} tokens</span>
+            <span>${chars.toLocaleString()} characters</span>
+        `;
+
+        // Meta
+        idEl.textContent = context.id;
+        tokensEl.textContent = `~${tokens} tokens`;
+
+        const source = context.metadata?.source || 'unknown';
+        const sourceClass = source === 'auto' ? 'source-auto' : 'source-manual';
+        sourceEl.innerHTML = `<span class="source-badge ${sourceClass}">${source}</span>`;
+
+        // Date
+        if (context.created_at) {
+            const date = new Date(context.created_at);
+            dateEl.textContent = date.toLocaleString();
+        } else {
+            dateEl.textContent = '';
+        }
+
+        // Text
+        textEl.textContent = context.text;
+    }
+
+    function renderHistory(contexts, currentId) {
+        const container = document.getElementById('historyList');
+
+        if (!contexts || contexts.length === 0) {
+            container.innerHTML = '<div class="context-empty">No context history yet.</div>';
+            return;
+        }
+
+        container.innerHTML = contexts.map(ctx => {
+            const isCurrent = ctx.id === currentId;
+            const source = ctx.metadata?.source || 'unknown';
+            const sourceClass = source === 'auto' ? 'source-auto' : 'source-manual';
+            const tokens = ctx.token_count || '?';
+            const preview = ctx.text.slice(0, 100).replace(/\n/g, ' ') + (ctx.text.length > 100 ? '...' : '');
+
+            const date = ctx.created_at ? new Date(ctx.created_at).toLocaleString() : '';
+
+            return `
+                <div class="history-item ${isCurrent ? 'current' : ''}" onclick="activateContext('${ctx.id}')">
+                    <div class="history-header">
+                        <div class="history-meta">
+                            <span class="context-id">${ctx.id.slice(0, 25)}...</span>
+                            <span>~${tokens} tokens</span>
+                            <span class="source-badge ${sourceClass}">${source}</span>
+                        </div>
+                        ${isCurrent ? '<span class="current-badge">Current</span>' : ''}
+                    </div>
+                    <div class="history-meta">${date}</div>
+                    <div class="history-preview">${escapeHtml(preview)}</div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function toggleEditor() {
+        const editor = document.getElementById('contextEditor');
+        const card = document.getElementById('currentContext');
+        const textarea = document.getElementById('contextTextarea');
+        const btn = document.getElementById('editBtn');
+
+        isEditing = !isEditing;
+
+        if (isEditing) {
+            editor.classList.add('active');
+            card.style.display = 'none';
+            btn.textContent = 'Cancel';
+
+            // Pre-fill with current context
+            const textEl = document.getElementById('contextText');
+            if (currentContextId) {
+                textarea.value = textEl.textContent;
+            } else {
+                textarea.value = '';
+            }
+            textarea.focus();
+        } else {
+            editor.classList.remove('active');
+            card.style.display = 'block';
+            btn.textContent = 'Edit';
+        }
+    }
+
+    function toggleRefreshOptions() {
+        const panel = document.getElementById('refreshOptions');
+        panel.classList.toggle('active');
+    }
+
+    async function saveContext() {
+        const textarea = document.getElementById('contextTextarea');
+        const text = textarea.value.trim();
+
+        if (!text) {
+            alert('Context text cannot be empty');
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/context', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text: text,
+                    context_id: currentContextId
+                })
+            });
+
+            const data = await res.json();
+            if (data.error) {
+                alert('Error: ' + data.error);
+                return;
+            }
+
+            toggleEditor();
+            loadContext();
+        } catch (e) {
+            console.error('Failed to save context:', e);
+            alert('Failed to save context');
+        }
+    }
+
+    async function refreshContext() {
+        const provider = document.getElementById('refreshProvider').value || null;
+        const hours = parseInt(document.getElementById('refreshHours').value) || 48;
+        const tokenLimit = parseInt(document.getElementById('refreshTokenLimit').value) || 2000;
+
+        document.getElementById('refreshOptions').classList.remove('active');
+        document.getElementById('loadingOverlay').classList.add('active');
+
+        try {
+            const res = await fetch('/api/context/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    provider: provider,
+                    hours: hours,
+                    token_limit: tokenLimit
+                })
+            });
+
+            const data = await res.json();
+            if (data.error) {
+                alert('Error: ' + data.error);
+                return;
+            }
+
+            loadContext();
+        } catch (e) {
+            console.error('Failed to refresh context:', e);
+            alert('Failed to refresh context');
+        } finally {
+            document.getElementById('loadingOverlay').classList.remove('active');
+        }
+    }
+
+    async function clearContext() {
+        if (!confirm('Clear the current context? The context will remain in history.')) {
+            return;
+        }
+
+        try {
+            await fetch('/api/context/clear', { method: 'POST' });
+            loadContext();
+        } catch (e) {
+            console.error('Failed to clear context:', e);
+            alert('Failed to clear context');
+        }
+    }
+
+    async function activateContext(contextId) {
+        try {
+            const res = await fetch(`/api/context/${contextId}/activate`, { method: 'POST' });
+            const data = await res.json();
+
+            if (data.error) {
+                alert('Error: ' + data.error);
+                return;
+            }
+
+            loadContext();
+        } catch (e) {
+            console.error('Failed to activate context:', e);
+            alert('Failed to activate context');
+        }
+    }
+
+    // Initialize
+    loadContext();
+</script>
+{% endblock %}
