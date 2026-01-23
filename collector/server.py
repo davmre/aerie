@@ -20,6 +20,7 @@ from database import (
     DEFAULT_DB_PATH,
     add_human_label,
     compute_single_chain,
+    count_conversation_roots_after_cursor,
     count_modes_using_prompt,
     create_mode,
     create_prompt,
@@ -27,6 +28,7 @@ from database import (
     delete_prompt,
     delete_setting,
     get_conversation_roots,
+    get_conversation_roots_cursor,
     get_mode,
     get_mode_decisions_batch,
     get_mode_label_counts,
@@ -1305,9 +1307,12 @@ def create_app(config=None):
         - platform: Filter by platform (twitter, bluesky)
         - sort: Sort field for chains (created_at or captured_at)
         - limit: Number of chains to return
-        - offset: Pagination offset
+        - offset: Pagination offset (for backwards compatibility)
+        - before_cursor: Load chains older than this cursor (for infinite scroll)
+        - after_cursor: Load chains newer than this cursor (for new posts)
 
         Returns chains with hidden_replies counts for expandable UI.
+        Also returns oldest_cursor and newest_cursor for cursor-based pagination.
 
         Scalability: This endpoint paginates at the conversation root level,
         computing chains on-demand for each root. This avoids loading all
@@ -1319,19 +1324,53 @@ def create_app(config=None):
         sort_field = request.args.get("sort", "captured_at")
         limit = request.args.get("limit", 20, type=int)
         offset = request.args.get("offset", 0, type=int)
+        before_cursor = request.args.get("before_cursor")
+        after_cursor = request.args.get("after_cursor")
 
-        # Get paginated conversation roots
-        roots, total = get_conversation_roots(
-            mode_id=mode_id,
-            sort_field=sort_field,
-            limit=limit,
-            offset=offset,
-            platform=platform_filter,
-            db_path=db_path,
-        )
+        # Use cursor-based pagination if cursors are provided, otherwise fall back to offset
+        if before_cursor or after_cursor:
+            roots, total, oldest_cursor, newest_cursor = get_conversation_roots_cursor(
+                mode_id=mode_id,
+                sort_field=sort_field,
+                limit=limit,
+                before_cursor=before_cursor,
+                after_cursor=after_cursor,
+                platform=platform_filter,
+                db_path=db_path,
+            )
+        else:
+            # Backwards-compatible offset-based pagination
+            roots, total = get_conversation_roots(
+                mode_id=mode_id,
+                sort_field=sort_field,
+                limit=limit,
+                offset=offset,
+                platform=platform_filter,
+                db_path=db_path,
+            )
+            # Generate cursors for offset-based results too
+            oldest_cursor = None
+            newest_cursor = None
+            if roots:
+                from database import encode_cursor
+                first_root = roots[0]
+                newest_cursor = encode_cursor(
+                    first_root.get(sort_field) or "",
+                    first_root["id"]
+                )
+                last_root = roots[-1]
+                oldest_cursor = encode_cursor(
+                    last_root.get(sort_field) or "",
+                    last_root["id"]
+                )
 
         if not roots:
-            return jsonify({"chains": [], "total": total})
+            return jsonify({
+                "chains": [],
+                "total": total,
+                "oldest_cursor": None,
+                "newest_cursor": None,
+            })
 
         # Compute chain for each root on-demand
         chains = []
@@ -1348,7 +1387,12 @@ def create_app(config=None):
                 all_tweet_ids.append(tweet["id"])
 
         if not all_tweet_ids:
-            return jsonify({"chains": [], "total": total})
+            return jsonify({
+                "chains": [],
+                "total": total,
+                "oldest_cursor": oldest_cursor,
+                "newest_cursor": newest_cursor,
+            })
 
         # Get retweet info
         retweets_by_tweet = get_retweets_batch(all_tweet_ids, db_path)
@@ -1393,7 +1437,45 @@ def create_app(config=None):
                     tweet["quoted_tweet"] = quoted_tweets.get(tweet["quoted_tweet_id"])
                 tweet["responses"] = responses_by_tweet.get(tid, [])
 
-        return jsonify({"chains": chains, "total": total})
+        return jsonify({
+            "chains": chains,
+            "total": total,
+            "oldest_cursor": oldest_cursor,
+            "newest_cursor": newest_cursor,
+        })
+
+    @app.route("/api/ui/chains/count-new", methods=["GET"])
+    def api_ui_chains_count_new():
+        """
+        Count approved chains newer than cursor (for "N new posts" banner).
+
+        Query params:
+        - mode: Mode ID for filtering (default: "default")
+        - after_cursor: Count chains newer than this cursor
+        - platform: Filter by platform (twitter, bluesky)
+        - sort: Sort field (created_at or captured_at)
+
+        Returns:
+        {"count": N}
+        """
+        db_path = get_db_path()
+        mode_id = request.args.get("mode", "default")
+        after_cursor = request.args.get("after_cursor")
+        platform_filter = request.args.get("platform")
+        sort_field = request.args.get("sort", "captured_at")
+
+        if not after_cursor:
+            return jsonify({"count": 0})
+
+        count = count_conversation_roots_after_cursor(
+            mode_id=mode_id,
+            after_cursor=after_cursor,
+            sort_field=sort_field,
+            platform=platform_filter,
+            db_path=db_path,
+        )
+
+        return jsonify({"count": count})
 
     return app
 

@@ -309,6 +309,50 @@
     @keyframes spin {
         to { transform: rotate(360deg); }
     }
+
+    /* New posts banner */
+    .new-posts-banner {
+        max-width: 600px;
+        margin: 0 auto 16px;
+        padding: 10px 16px;
+        background: var(--accent);
+        color: var(--bg-primary);
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        font-size: 0.9rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: opacity 0.2s;
+    }
+
+    .new-posts-banner:hover {
+        opacity: 0.9;
+    }
+
+    .new-posts-banner button {
+        background: var(--bg-primary);
+        color: var(--accent);
+        border: none;
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+
+    .new-posts-banner button:hover {
+        opacity: 0.9;
+    }
+
+    .new-posts-banner .dismiss-btn {
+        background: transparent;
+        color: var(--bg-primary);
+        padding: 4px 8px;
+        font-size: 1.2rem;
+        line-height: 1;
+    }
 </style>
 {% endblock %}
 
@@ -343,6 +387,13 @@
     <span id="classification-status-text">Classifying posts...</span>
 </div>
 
+<!-- New posts banner -->
+<div class="new-posts-banner" id="new-posts-banner" style="display: none;" onclick="loadNewPostsAbove()">
+    <span><span id="new-posts-count">0</span> new posts above</span>
+    <button onclick="event.stopPropagation(); loadNewPostsAbove()">Show</button>
+    <button class="dismiss-btn" onclick="event.stopPropagation(); dismissBanner()">&times;</button>
+</div>
+
 <div id="chains-container">
     <div class="loading">Loading tweets...</div>
 </div>
@@ -368,8 +419,13 @@
 {% block extra_scripts %}
 <script>
 const PAGE_SIZE = 20;
-let offset = 0;
-let hasMore = true;
+
+// Cursor-based pagination state
+let oldestCursor = null;           // For loading older posts (infinite scroll)
+let newestCursor = null;           // For detecting new posts above
+let displayedChainIds = new Set(); // Deduplication for chain roots
+let hasOlder = true;               // More older posts available?
+let newPostsAbove = 0;             // Count for banner
 let loading = false;
 
 // Modal navigation history
@@ -383,6 +439,8 @@ const loadMoreDiv = document.getElementById('load-more');
 const statsDiv = document.getElementById('mode-stats');
 const modal = document.getElementById('replies-modal');
 const modalBody = document.getElementById('modal-body');
+const newPostsBanner = document.getElementById('new-posts-banner');
+const newPostsCount = document.getElementById('new-posts-count');
 
 // Update stats display for current mode
 async function updateStats(mode) {
@@ -407,7 +465,7 @@ async function loadChains(append = false) {
 
     if (!append) {
         container.innerHTML = '<div class="loading">Loading tweets...</div>';
-        offset = 0;
+        resetCursors();
     }
 
     try {
@@ -415,7 +473,6 @@ async function loadChains(append = false) {
             mode: modeSelect.value,
             sort: sortSelect.value,
             limit: PAGE_SIZE,
-            offset: offset
         });
 
         // Add platform filter if not "all"
@@ -423,11 +480,17 @@ async function loadChains(append = false) {
             params.set('platform', platformSelect.value);
         }
 
+        // Use cursor for appending older posts
+        if (append && oldestCursor) {
+            params.set('before_cursor', oldestCursor);
+        }
+
         const response = await fetch(`/api/ui/chains?${params}`);
         const data = await response.json();
 
         if (!append) {
             container.innerHTML = '';
+            displayedChainIds.clear();
         }
 
         if (data.chains.length === 0 && !append) {
@@ -436,13 +499,26 @@ async function loadChains(append = false) {
             return;
         }
 
+        // Render chains with deduplication
         data.chains.forEach(chainData => {
-            container.insertAdjacentHTML('beforeend', renderChain(chainData));
+            const rootId = chainData.chain[0]?.id;
+            if (rootId && !displayedChainIds.has(rootId)) {
+                displayedChainIds.add(rootId);
+                container.insertAdjacentHTML('beforeend', renderChain(chainData));
+            }
         });
 
-        hasMore = data.chains.length === PAGE_SIZE;
-        loadMoreDiv.style.display = hasMore ? 'block' : 'none';
-        offset += data.chains.length;
+        // Update cursors from response
+        if (data.oldest_cursor) {
+            oldestCursor = data.oldest_cursor;
+        }
+        // Only update newest cursor on initial load (not append)
+        if (!append && data.newest_cursor) {
+            newestCursor = data.newest_cursor;
+        }
+
+        hasOlder = data.chains.length === PAGE_SIZE;
+        loadMoreDiv.style.display = hasOlder ? 'block' : 'none';
 
     } catch (err) {
         if (!append) {
@@ -453,8 +529,62 @@ async function loadChains(append = false) {
     }
 }
 
+function resetCursors() {
+    oldestCursor = null;
+    newestCursor = null;
+    displayedChainIds.clear();
+    hasOlder = true;
+    newPostsAbove = 0;
+    newPostsBanner.style.display = 'none';
+}
+
 function loadMore() {
     loadChains(true);
+}
+
+// =========================================================================
+// New posts banner functions
+// =========================================================================
+
+async function checkForNewPosts() {
+    if (!newestCursor) return 0;
+
+    const params = new URLSearchParams({
+        mode: modeSelect.value,
+        after_cursor: newestCursor,
+        sort: sortSelect.value,
+    });
+
+    if (platformSelect.value !== 'all') {
+        params.set('platform', platformSelect.value);
+    }
+
+    try {
+        const resp = await fetch(`/api/ui/chains/count-new?${params}`);
+        const data = await resp.json();
+        return data.count || 0;
+    } catch (err) {
+        console.error('Error checking for new posts:', err);
+        return 0;
+    }
+}
+
+function showNewPostsBanner(count) {
+    newPostsCount.textContent = count;
+    newPostsBanner.style.display = 'flex';
+}
+
+function dismissBanner() {
+    newPostsAbove = 0;
+    newPostsBanner.style.display = 'none';
+}
+
+function loadNewPostsAbove() {
+    // Reset and reload from top to show new posts
+    resetCursors();
+    container.innerHTML = '';
+    loadChains(false);
+    updateStats(modeSelect.value);
 }
 
 function renderChain(chainData) {
@@ -715,8 +845,13 @@ function startPolling() {
             const data = await resp.json();
 
             if (data.newly_classified && data.newly_classified.length > 0) {
-                // Refresh the chain list to include new posts
-                await loadChains(false);  // false = replace, not append
+                // Check for new posts above current view instead of full refresh
+                const newCount = await checkForNewPosts();
+                if (newCount > 0) {
+                    newPostsAbove = newCount;
+                    showNewPostsBanner(newPostsAbove);
+                }
+                // Update stats to reflect classification progress
                 updateStats(modeSelect.value);
                 lastPollTime = new Date().toISOString();
             }
@@ -761,8 +896,8 @@ window.addEventListener('scroll', async () => {
     const nearBottom = window.innerHeight + window.scrollY >= document.body.offsetHeight - 500;
 
     if (nearBottom) {
-        if (hasMore) {
-            // Normal case: load more already-classified chains
+        if (hasOlder) {
+            // Normal case: load more already-classified chains using cursor
             loadMore();
         } else if (!pollInterval) {
             // No more classified posts - trigger classification of older posts
@@ -772,7 +907,7 @@ window.addEventListener('scroll', async () => {
                 max_age_hours: 168,  // 1 week
             });
             if (result.queued > 0) {
-                // Polling will refresh the list when done
+                // Polling will show banner when done, not disrupt scroll
             }
             loading = false;
         }
@@ -782,16 +917,21 @@ window.addEventListener('scroll', async () => {
 // Event handlers with classification triggering
 modeSelect.addEventListener('change', () => {
     stopPolling();
+    resetCursors();
     loadChains();
     updateStats(modeSelect.value);
     triggerClassification();
 });
 platformSelect.addEventListener('change', () => {
     stopPolling();
+    resetCursors();
     loadChains();
     triggerClassification();
 });
-sortSelect.addEventListener('change', () => loadChains());
+sortSelect.addEventListener('change', () => {
+    resetCursors();
+    loadChains();
+});
 
 // Initial load with classification trigger
 loadChains();
