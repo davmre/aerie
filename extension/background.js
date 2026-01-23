@@ -4,6 +4,8 @@
 // Default settings
 const DEFAULTS = {
   backendUrl: "http://localhost:8080",
+  authUsername: "",
+  authPassword: "",
   mode: "default",
   pollInterval: 3000,
   pendingOpacity: 0.02,
@@ -12,6 +14,15 @@ const DEFAULTS = {
 
 // Current settings (loaded from storage)
 let settings = { ...DEFAULTS };
+
+// Build auth headers if credentials are set
+function getAuthHeaders() {
+  if (settings.authUsername && settings.authPassword) {
+    const credentials = btoa(`${settings.authUsername}:${settings.authPassword}`);
+    return { 'Authorization': `Basic ${credentials}` };
+  }
+  return {};
+}
 
 // Load settings on startup
 async function loadSettings() {
@@ -396,6 +407,7 @@ async function sendToCollector(tweets, retweets = []) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({ tweets, retweets }),
     });
@@ -430,6 +442,7 @@ async function checkTweetsForPrefilter(tweetIds) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...getAuthHeaders(),
       },
       body: JSON.stringify({ ids: tweetIds, mode: settings.mode }),
     });

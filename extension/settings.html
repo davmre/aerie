@@ -21,6 +21,18 @@
                 </div>
 
                 <div class="field">
+                    <label for="authUsername">Username (optional)</label>
+                    <input type="text" id="authUsername" placeholder="Leave blank for localhost" autocomplete="username">
+                    <p class="help">Basic auth username for remote servers</p>
+                </div>
+
+                <div class="field">
+                    <label for="authPassword">Password</label>
+                    <input type="password" id="authPassword" placeholder="Leave blank for localhost" autocomplete="current-password">
+                    <p class="help">Basic auth password for remote servers</p>
+                </div>
+
+                <div class="field">
                     <label for="mode">Classification Mode</label>
                     <select id="mode">
                         <option value="default">Default</option>

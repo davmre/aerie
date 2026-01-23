@@ -4,6 +4,8 @@
 // Default settings
 const DEFAULTS = {
   backendUrl: "http://localhost:8080",
+  authUsername: "",
+  authPassword: "",
   mode: "default",
   pollInterval: 3000,
   pendingOpacity: 0.02,
@@ -12,6 +14,15 @@ const DEFAULTS = {
 
 // Current settings (loaded from storage)
 let settings = { ...DEFAULTS };
+
+// Build auth headers if credentials are set
+function getAuthHeaders() {
+  if (settings.authUsername && settings.authPassword) {
+    const credentials = btoa(`${settings.authUsername}:${settings.authPassword}`);
+    return { 'Authorization': `Basic ${credentials}` };
+  }
+  return {};
+}
 
 // Poll interval handle (for restarting on settings change)
 let pollIntervalId = null;
@@ -65,7 +76,9 @@ browser.storage.onChanged.addListener((changes, area) => {
 // Pre-load cache with all classified tweets on init
 async function preloadCache() {
   try {
-    const response = await fetch(`${settings.backendUrl}/tweets/classified-ids?mode=${settings.mode}`);
+    const response = await fetch(`${settings.backendUrl}/tweets/classified-ids?mode=${settings.mode}`, {
+      headers: getAuthHeaders()
+    });
     if (response.ok) {
       const classified = await response.json();
       for (const [id, status] of Object.entries(classified)) {
@@ -99,7 +112,10 @@ async function checkTweetStatuses(tweetIds) {
   try {
     const response = await fetch(`${settings.backendUrl}/tweets/check`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
       body: JSON.stringify({ ids: tweetIds, mode: settings.mode })
     });
 

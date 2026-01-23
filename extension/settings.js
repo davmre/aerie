@@ -1,6 +1,8 @@
 // Default settings values
 const DEFAULTS = {
     backendUrl: "http://localhost:8080",
+    authUsername: "",
+    authPassword: "",
     mode: "default",
     pollInterval: 3000,
     pendingOpacity: 0.02,
@@ -10,6 +12,8 @@ const DEFAULTS = {
 // DOM elements
 const form = document.getElementById('settings-form');
 const backendUrlInput = document.getElementById('backendUrl');
+const authUsernameInput = document.getElementById('authUsername');
+const authPasswordInput = document.getElementById('authPassword');
 const modeSelect = document.getElementById('mode');
 const pollIntervalInput = document.getElementById('pollInterval');
 const pendingOpacityInput = document.getElementById('pendingOpacity');
@@ -19,24 +23,36 @@ const filteredOpacityValue = document.getElementById('filteredOpacity-value');
 const resetBtn = document.getElementById('reset-btn');
 const statusEl = document.getElementById('status');
 
+// Build auth headers if credentials are set
+function getAuthHeaders(username, password) {
+    if (username && password) {
+        const credentials = btoa(`${username}:${password}`);
+        return { 'Authorization': `Basic ${credentials}` };
+    }
+    return {};
+}
+
 // Load settings and populate form
 async function loadSettings() {
     const settings = await browser.storage.local.get(DEFAULTS);
 
     backendUrlInput.value = settings.backendUrl;
+    authUsernameInput.value = settings.authUsername || "";
+    authPasswordInput.value = settings.authPassword || "";
     modeSelect.value = settings.mode;
     pollIntervalInput.value = settings.pollInterval;
     pendingOpacityInput.value = settings.pendingOpacity;
     filteredOpacityInput.value = settings.filteredOpacity;
 
     updateOpacityDisplay();
-    await loadModes(settings.backendUrl, settings.mode);
+    await loadModes(settings.backendUrl, settings.authUsername, settings.authPassword, settings.mode);
 }
 
 // Fetch available modes from backend
-async function loadModes(backendUrl, currentMode) {
+async function loadModes(backendUrl, username, password, currentMode) {
     try {
-        const response = await fetch(`${backendUrl}/modes`);
+        const headers = getAuthHeaders(username, password);
+        const response = await fetch(`${backendUrl}/modes`, { headers });
         if (!response.ok) throw new Error('Failed to fetch modes');
 
         const data = await response.json();
@@ -81,6 +97,8 @@ async function saveSettings(e) {
 
     const settings = {
         backendUrl: backendUrlInput.value.replace(/\/$/, ''), // Remove trailing slash
+        authUsername: authUsernameInput.value.trim(),
+        authPassword: authPasswordInput.value,
         mode: modeSelect.value,
         pollInterval: parseInt(pollIntervalInput.value, 10),
         pendingOpacity: parseFloat(pendingOpacityInput.value),
@@ -130,14 +148,17 @@ resetBtn.addEventListener('click', resetSettings);
 pendingOpacityInput.addEventListener('input', updateOpacityDisplay);
 filteredOpacityInput.addEventListener('input', updateOpacityDisplay);
 
-// Reload modes when backend URL changes
+// Reload modes when backend URL or auth changes
 let modeLoadTimeout;
-backendUrlInput.addEventListener('input', () => {
+function scheduleModesReload() {
     clearTimeout(modeLoadTimeout);
     modeLoadTimeout = setTimeout(() => {
-        loadModes(backendUrlInput.value, modeSelect.value);
+        loadModes(backendUrlInput.value, authUsernameInput.value, authPasswordInput.value, modeSelect.value);
     }, 500);
-});
+}
+backendUrlInput.addEventListener('input', scheduleModesReload);
+authUsernameInput.addEventListener('input', scheduleModesReload);
+authPasswordInput.addEventListener('input', scheduleModesReload);
 
 // Initial load
 loadSettings();

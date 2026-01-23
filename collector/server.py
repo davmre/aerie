@@ -246,8 +246,8 @@ def create_app(config=None):
     def add_cors_headers(response):
         """Add CORS headers to allow requests from browser extensions."""
         response.headers["Access-Control-Allow-Origin"] = "*"
-        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         return response
 
     @app.route("/tweets", methods=["POST", "OPTIONS"])
