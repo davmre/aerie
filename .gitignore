@@ -15,3 +15,7 @@ venv/
 
 # OS
 .DS_Store
+
+# Deployment
+.env*
+nginx-aerie.conf
