@@ -975,6 +975,114 @@ def create_app(config=None):
         return jsonify({"status": "ok"})
 
     # =========================================================================
+    # LLM API Key Settings
+    # =========================================================================
+
+    @app.route("/api/settings/llm", methods=["GET"])
+    def api_get_llm_settings():
+        """Get LLM provider settings (API keys are masked)."""
+        from providers import list_providers
+
+        db_path = get_db_path()
+        providers = list_providers(db_path)
+
+        # Return provider info with masked key status
+        return jsonify({
+            "providers": [
+                {
+                    "name": p["name"],
+                    "description": p["description"],
+                    "api_key_set": p["api_key_set"],
+                    "api_key_source": p.get("api_key_source"),
+                    "api_key_env_var": p["api_key_env_var"],
+                }
+                for p in providers
+            ]
+        })
+
+    @app.route("/api/settings/llm/<provider_name>", methods=["POST"])
+    def api_save_llm_key(provider_name: str):
+        """Save an LLM provider API key."""
+        from providers import PROVIDERS, set_api_key_in_settings
+
+        if provider_name not in PROVIDERS:
+            return jsonify({"error": f"Unknown provider: {provider_name}"}), 400
+
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        api_key = data.get("api_key", "").strip()
+        if not api_key:
+            return jsonify({"error": "API key is required"}), 400
+
+        db_path = get_db_path()
+        if set_api_key_in_settings(provider_name, api_key, db_path):
+            return jsonify({"status": "ok"})
+        else:
+            return jsonify({"error": "Failed to save API key"}), 500
+
+    @app.route("/api/settings/llm/<provider_name>", methods=["DELETE"])
+    def api_delete_llm_key(provider_name: str):
+        """Delete an LLM provider API key from database settings."""
+        from providers import PROVIDERS, delete_api_key_from_settings
+
+        if provider_name not in PROVIDERS:
+            return jsonify({"error": f"Unknown provider: {provider_name}"}), 400
+
+        db_path = get_db_path()
+        delete_api_key_from_settings(provider_name, db_path)
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/settings/llm/<provider_name>/test", methods=["POST"])
+    def api_test_llm_key(provider_name: str):
+        """Test an LLM provider API key by making a simple API call."""
+        from providers import PROVIDERS, get_provider, set_api_key_in_settings
+
+        if provider_name not in PROVIDERS:
+            return jsonify({"error": f"Unknown provider: {provider_name}"}), 400
+
+        data = request.get_json() or {}
+        api_key = data.get("api_key", "").strip()
+
+        # If API key provided, temporarily store it for testing
+        db_path = get_db_path()
+        if api_key:
+            set_api_key_in_settings(provider_name, api_key, db_path)
+
+        try:
+            provider = get_provider(provider_name)
+            # Check if key is available
+            key = provider.get_api_key(db_path)
+            if not key:
+                return jsonify({
+                    "error": f"No API key configured. Set {provider.config.api_key_env_var} or enter a key."
+                }), 400
+
+            # Make a minimal test call
+            result = provider.classify(
+                "Test tweet for API validation",
+                "Respond with just: {\"test\": true}",
+                model=provider.config.default_model,
+            )
+
+            if "_error" in result:
+                return jsonify({
+                    "error": f"API call failed: {result.get('_message', result.get('_error'))}"
+                }), 400
+
+            return jsonify({
+                "success": True,
+                "provider": provider_name,
+                "model": provider.config.default_model,
+            })
+
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"Test failed: {str(e)}"}), 500
+
+    # =========================================================================
     # Web UI Routes
     # =========================================================================
 

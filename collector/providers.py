@@ -17,7 +17,98 @@ import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+
+# =============================================================================
+# API Key Storage Helpers
+# =============================================================================
+
+# Setting keys for API keys in the database
+API_KEY_SETTINGS = {
+    "anthropic": "anthropic_api_key",
+    "gemini": "gemini_api_key",
+}
+
+
+def get_api_key_from_settings(provider_name: str, db_path: Path | None = None) -> str | None:
+    """
+    Get API key from database settings.
+
+    Args:
+        provider_name: Provider name ("anthropic", "gemini")
+        db_path: Database path (uses DEFAULT_DB_PATH if None)
+
+    Returns:
+        API key string or None if not found
+    """
+    setting_key = API_KEY_SETTINGS.get(provider_name)
+    if not setting_key:
+        return None
+
+    try:
+        # Import here to avoid circular imports
+        from database import DEFAULT_DB_PATH, get_setting
+
+        path = db_path or DEFAULT_DB_PATH
+        return get_setting(setting_key, path)
+    except Exception:
+        # If database isn't available, return None
+        return None
+
+
+def set_api_key_in_settings(
+    provider_name: str, api_key: str, db_path: Path | None = None
+) -> bool:
+    """
+    Store API key in database settings.
+
+    Args:
+        provider_name: Provider name ("anthropic", "gemini")
+        api_key: API key to store
+        db_path: Database path (uses DEFAULT_DB_PATH if None)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    setting_key = API_KEY_SETTINGS.get(provider_name)
+    if not setting_key:
+        return False
+
+    try:
+        from database import DEFAULT_DB_PATH, set_setting
+
+        path = db_path or DEFAULT_DB_PATH
+        set_setting(setting_key, api_key, path)
+        return True
+    except Exception:
+        return False
+
+
+def delete_api_key_from_settings(provider_name: str, db_path: Path | None = None) -> bool:
+    """
+    Delete API key from database settings.
+
+    Args:
+        provider_name: Provider name ("anthropic", "gemini")
+        db_path: Database path (uses DEFAULT_DB_PATH if None)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    setting_key = API_KEY_SETTINGS.get(provider_name)
+    if not setting_key:
+        return False
+
+    try:
+        from database import DEFAULT_DB_PATH, delete_setting
+
+        path = db_path or DEFAULT_DB_PATH
+        delete_setting(setting_key, path)
+        return True
+    except Exception:
+        return False
 
 
 @dataclass
@@ -78,9 +169,21 @@ class LLMProvider(ABC):
         """
         pass
 
-    def get_api_key(self) -> str | None:
-        """Get the API key for this provider from environment."""
-        return os.environ.get(self.config.api_key_env_var)
+    def get_api_key(self, db_path: Path | None = None) -> str | None:
+        """
+        Get the API key for this provider.
+
+        Checks in order:
+        1. Environment variable (takes precedence for Docker/deployment flexibility)
+        2. Database settings (for web UI configuration)
+        """
+        # Environment variable takes precedence
+        env_key = os.environ.get(self.config.api_key_env_var)
+        if env_key:
+            return env_key
+
+        # Fall back to database settings
+        return get_api_key_from_settings(self.config.name, db_path)
 
     def get_model(self, model: str | None) -> str:
         """Get the model to use, falling back to default."""
@@ -455,9 +558,12 @@ def get_provider(provider_name: str) -> LLMProvider:
     return _provider_instances[provider_name]
 
 
-def list_providers() -> list[dict[str, Any]]:
+def list_providers(db_path: Path | None = None) -> list[dict[str, Any]]:
     """
     List available providers with their configurations.
+
+    Args:
+        db_path: Database path for checking stored API keys
 
     Returns:
         List of provider info dicts with name, description, default_model, etc.
@@ -465,6 +571,9 @@ def list_providers() -> list[dict[str, Any]]:
     result = []
     for provider_class in PROVIDERS.values():
         config = provider_class.config
+        # Check both env var and database settings
+        env_key_set = bool(os.environ.get(config.api_key_env_var))
+        db_key_set = bool(get_api_key_from_settings(config.name, db_path))
         result.append(
             {
                 "name": config.name,
@@ -472,7 +581,8 @@ def list_providers() -> list[dict[str, Any]]:
                 "default_model": config.default_model,
                 "available_models": config.available_models,
                 "api_key_env_var": config.api_key_env_var,
-                "api_key_set": bool(os.environ.get(config.api_key_env_var)),
+                "api_key_set": env_key_set or db_key_set,
+                "api_key_source": "env" if env_key_set else ("database" if db_key_set else None),
             }
         )
     return result

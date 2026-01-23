@@ -167,6 +167,37 @@
     .password-toggle .toggle-btn:hover {
         color: var(--text-primary);
     }
+
+    .key-status {
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin-left: 8px;
+    }
+
+    .key-status.configured {
+        background: var(--accent-approved-bg);
+        color: var(--accent-approved-text);
+    }
+
+    .key-status.not-configured {
+        background: var(--accent-pending-bg);
+        color: var(--accent-pending-text);
+    }
+
+    .key-status.env {
+        background: var(--bg-nested);
+        color: var(--text-secondary);
+    }
+
+    .btn-sm {
+        padding: 6px 12px;
+        font-size: 0.85rem;
+    }
+
+    .llm-provider {
+        margin-bottom: 0;
+    }
 </style>
 {% endblock %}
 
@@ -220,6 +251,65 @@
         </div>
     </div>
 
+    <!-- LLM API Keys -->
+    <div class="settings-section">
+        <h2>
+            <span class="platform-icon">🤖</span>
+            LLM API Keys
+        </h2>
+        <div style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 16px;">
+            Configure API keys for content classification. Environment variables take precedence over saved keys.
+        </div>
+
+        <!-- Anthropic -->
+        <div class="llm-provider" data-provider="anthropic">
+            <div class="form-group">
+                <label>
+                    Anthropic (Claude)
+                    <span class="key-status" id="anthropic-status"></span>
+                </label>
+                <div class="password-toggle">
+                    <input type="password" id="anthropic-key" placeholder="sk-ant-..." autocomplete="off">
+                    <button type="button" class="toggle-btn" onclick="toggleLLMPassword('anthropic-key')">👁</button>
+                </div>
+                <div class="help-text">
+                    Get your API key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>
+                </div>
+            </div>
+            <div class="button-row" style="margin-top: 12px;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveLLMKey('anthropic')">Save</button>
+                <button type="button" class="btn btn-test btn-sm" onclick="testLLMKey('anthropic')">Test</button>
+                <button type="button" class="btn btn-sm" onclick="deleteLLMKey('anthropic')" style="margin-left: auto;">Clear</button>
+            </div>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-secondary); margin: 20px 0;">
+
+        <!-- Gemini -->
+        <div class="llm-provider" data-provider="gemini">
+            <div class="form-group">
+                <label>
+                    Google Gemini
+                    <span class="key-status" id="gemini-status"></span>
+                </label>
+                <div class="password-toggle">
+                    <input type="password" id="gemini-key" placeholder="AIza..." autocomplete="off">
+                    <button type="button" class="toggle-btn" onclick="toggleLLMPassword('gemini-key')">👁</button>
+                </div>
+                <div class="help-text">
+                    Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">aistudio.google.com</a>
+                </div>
+            </div>
+            <div class="button-row" style="margin-top: 12px;">
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveLLMKey('gemini')">Save</button>
+                <button type="button" class="btn btn-test btn-sm" onclick="testLLMKey('gemini')">Test</button>
+                <button type="button" class="btn btn-sm" onclick="deleteLLMKey('gemini')" style="margin-left: auto;">Clear</button>
+            </div>
+        </div>
+
+        <div id="llm-status" class="connection-status hidden"></div>
+    </div>
+
     <!-- Usage Notes -->
     <div class="settings-section">
         <h2>Usage Notes</h2>
@@ -235,7 +325,7 @@ python bluesky_poller.py --watch</pre>
             </p>
             <p>
                 <strong>Note:</strong> Settings saved here are stored in the local database. Environment variables
-                (<code>BLUESKY_HANDLE</code>, <code>BLUESKY_APP_PASSWORD</code>) take precedence if set.
+                take precedence if set.
             </p>
         </div>
     </div>
@@ -344,5 +434,128 @@ function togglePassword() {
 
 // Load settings on page load
 loadSettings();
+
+// =============================================================================
+// LLM API Key Management
+// =============================================================================
+
+const llmStatusDiv = document.getElementById('llm-status');
+
+async function loadLLMSettings() {
+    try {
+        const response = await fetch('/api/settings/llm');
+        const data = await response.json();
+
+        for (const provider of data.providers) {
+            const statusEl = document.getElementById(`${provider.name}-status`);
+            if (statusEl) {
+                if (provider.api_key_set) {
+                    if (provider.api_key_source === 'env') {
+                        statusEl.textContent = 'Set via env';
+                        statusEl.className = 'key-status env';
+                    } else {
+                        statusEl.textContent = 'Configured';
+                        statusEl.className = 'key-status configured';
+                    }
+                } else {
+                    statusEl.textContent = 'Not set';
+                    statusEl.className = 'key-status not-configured';
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Failed to load LLM settings:', err);
+    }
+}
+
+async function saveLLMKey(provider) {
+    const input = document.getElementById(`${provider}-key`);
+    const apiKey = input.value.trim();
+
+    if (!apiKey) {
+        showLLMStatus('Enter an API key first', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/settings/llm/${provider}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            showLLMStatus(`${provider} API key saved`, 'success');
+            input.value = '';
+            loadLLMSettings();
+        } else {
+            showLLMStatus(data.error || 'Failed to save', 'error');
+        }
+    } catch (err) {
+        showLLMStatus('Failed to save: ' + err.message, 'error');
+    }
+}
+
+async function testLLMKey(provider) {
+    const input = document.getElementById(`${provider}-key`);
+    const apiKey = input.value.trim();
+
+    showLLMStatus('Testing connection...', 'pending');
+
+    try {
+        const response = await fetch(`/api/settings/llm/${provider}/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey || undefined })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            showLLMStatus(`${provider} connected successfully (${data.model})`, 'success');
+        } else {
+            showLLMStatus(data.error || 'Connection failed', 'error');
+        }
+    } catch (err) {
+        showLLMStatus('Test failed: ' + err.message, 'error');
+    }
+}
+
+async function deleteLLMKey(provider) {
+    if (!confirm(`Clear saved ${provider} API key?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/settings/llm/${provider}`, {
+            method: 'DELETE'
+        });
+
+        if (response.ok) {
+            showLLMStatus(`${provider} API key cleared`, 'success');
+            loadLLMSettings();
+        } else {
+            const data = await response.json();
+            showLLMStatus(data.error || 'Failed to clear', 'error');
+        }
+    } catch (err) {
+        showLLMStatus('Failed to clear: ' + err.message, 'error');
+    }
+}
+
+function showLLMStatus(message, type) {
+    llmStatusDiv.textContent = message;
+    llmStatusDiv.className = 'connection-status ' + type;
+}
+
+function toggleLLMPassword(inputId) {
+    const input = document.getElementById(inputId);
+    input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+// Load LLM settings on page load
+loadLLMSettings();
 </script>
 {% endblock %}
