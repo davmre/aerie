@@ -1,5 +1,8 @@
 """Integration tests for the Read view API."""
 
+from datetime import datetime, timedelta
+
+from database import decode_cursor, encode_cursor
 from tests.fixtures import (
     approve_tweets,
     create_and_store_tweets,
@@ -258,3 +261,178 @@ class TestPagination:
 
         assert len(data["tweets"]) == 3
         assert data["total"] == 10
+
+
+class TestCursorEncoding:
+    """Tests for cursor encode/decode functions."""
+
+    def test_encode_decode_roundtrip(self):
+        """Cursor should encode and decode back to original values."""
+        created_at = "2025-01-15T12:00:00+00:00"
+        tweet_id = "12345"
+
+        cursor = encode_cursor(created_at, tweet_id)
+        decoded = decode_cursor(cursor)
+
+        assert decoded is not None
+        assert decoded[0] == created_at
+        assert decoded[1] == tweet_id
+
+    def test_decode_invalid_cursor(self):
+        """Invalid cursor should return None."""
+        assert decode_cursor("invalid") is None
+        assert decode_cursor("") is None
+        assert decode_cursor("not-base64!!!") is None
+
+    def test_cursor_is_url_safe(self):
+        """Cursor should be URL-safe (no special chars that need escaping)."""
+        cursor = encode_cursor("2025-01-15T12:00:00+00:00", "12345")
+        # URL-safe base64 uses - and _ instead of + and /
+        assert "+" not in cursor
+        assert "/" not in cursor
+
+
+class TestCursorBasedPagination:
+    """Tests for cursor-based pagination in /api/ui/chains endpoint."""
+
+    def test_chains_returns_cursors(self, client, test_db):
+        """API should return oldest_cursor and newest_cursor."""
+        now = datetime.utcnow()
+        tweets = [
+            make_tweet(id="1", text="Tweet 1", created_at=(now - timedelta(hours=2)).isoformat()),
+            make_tweet(id="2", text="Tweet 2", created_at=(now - timedelta(hours=1)).isoformat()),
+            make_tweet(id="3", text="Tweet 3", created_at=now.isoformat()),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        resp = client.get("/api/ui/chains?mode=default&sort=created_at")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        assert "oldest_cursor" in data
+        assert "newest_cursor" in data
+        assert data["oldest_cursor"] is not None
+        assert data["newest_cursor"] is not None
+
+    def test_before_cursor_loads_older_posts(self, client, test_db):
+        """before_cursor should load posts older than the cursor."""
+        now = datetime.utcnow()
+        tweets = [
+            make_tweet(id="1", text="Oldest", created_at=(now - timedelta(hours=4)).isoformat()),
+            make_tweet(id="2", text="Older", created_at=(now - timedelta(hours=3)).isoformat()),
+            make_tweet(id="3", text="Middle", created_at=(now - timedelta(hours=2)).isoformat()),
+            make_tweet(id="4", text="Newer", created_at=(now - timedelta(hours=1)).isoformat()),
+            make_tweet(id="5", text="Newest", created_at=now.isoformat()),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3", "4", "5"], test_db)
+
+        # Get first page
+        resp = client.get("/api/ui/chains?mode=default&sort=created_at&limit=2")
+        data = resp.get_json()
+
+        # Should get newest 2: 5 and 4
+        assert len(data["chains"]) == 2
+        chain_ids = [c["chain"][0]["id"] for c in data["chains"]]
+        assert "5" in chain_ids
+        assert "4" in chain_ids
+
+        # Use oldest_cursor to get next page
+        oldest_cursor = data["oldest_cursor"]
+        resp2 = client.get(f"/api/ui/chains?mode=default&sort=created_at&limit=2&before_cursor={oldest_cursor}")
+        data2 = resp2.get_json()
+
+        # Should get next 2 older: 3 and 2
+        assert len(data2["chains"]) == 2
+        chain_ids2 = [c["chain"][0]["id"] for c in data2["chains"]]
+        assert "3" in chain_ids2
+        assert "2" in chain_ids2
+
+    def test_count_new_endpoint(self, client, test_db):
+        """count-new endpoint should return count of posts newer than cursor."""
+        now = datetime.utcnow()
+        tweets = [
+            make_tweet(id="1", text="Old", created_at=(now - timedelta(hours=2)).isoformat()),
+            make_tweet(id="2", text="Middle", created_at=(now - timedelta(hours=1)).isoformat()),
+            make_tweet(id="3", text="New", created_at=now.isoformat()),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["1", "2", "3"], test_db)
+
+        # Create cursor pointing to tweet 2
+        cursor = encode_cursor((now - timedelta(hours=1)).isoformat(), "2")
+
+        resp = client.get(f"/api/ui/chains/count-new?mode=default&after_cursor={cursor}&sort=created_at")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        # Should count 1 post newer than cursor (tweet 3)
+        assert data["count"] == 1
+
+    def test_count_new_no_cursor_returns_zero(self, client, test_db):
+        """count-new without cursor should return 0."""
+        resp = client.get("/api/ui/chains/count-new?mode=default")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] == 0
+
+    def test_identical_timestamps_tie_breaking(self, client, test_db):
+        """Posts with identical timestamps should be ordered consistently and cursor pagination should not skip posts."""
+        same_time = "2025-01-15T12:00:00+00:00"
+        tweets = [
+            make_tweet(id="aaa", text="First by ID", created_at=same_time),
+            make_tweet(id="bbb", text="Second by ID", created_at=same_time),
+            make_tweet(id="ccc", text="Third by ID", created_at=same_time),
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets(["aaa", "bbb", "ccc"], test_db)
+
+        # Get first page - when timestamps are identical, cursor pagination uses ID as tiebreaker
+        # The initial request (no cursor) returns results ordered by (created_at DESC, id DESC)
+        resp = client.get("/api/ui/chains?mode=default&sort=created_at&limit=2")
+        data = resp.get_json()
+
+        assert len(data["chains"]) == 2
+        first_page_ids = {c["chain"][0]["id"] for c in data["chains"]}
+
+        # Get next page using cursor - should get the remaining post without duplicates
+        oldest_cursor = data["oldest_cursor"]
+        resp2 = client.get(f"/api/ui/chains?mode=default&sort=created_at&limit=2&before_cursor={oldest_cursor}")
+        data2 = resp2.get_json()
+
+        assert len(data2["chains"]) == 1
+        second_page_ids = {c["chain"][0]["id"] for c in data2["chains"]}
+
+        # Combined, all three should be present with no duplicates
+        all_ids = first_page_ids | second_page_ids
+        assert all_ids == {"aaa", "bbb", "ccc"}
+        assert len(first_page_ids & second_page_ids) == 0  # No overlap
+
+    def test_offset_still_works_for_backwards_compatibility(self, client, test_db):
+        """offset parameter should still work for backwards compatibility."""
+        now = datetime.utcnow()
+        tweets = [
+            make_tweet(id=str(i), text=f"Tweet {i}", created_at=(now - timedelta(hours=i)).isoformat())
+            for i in range(5)
+        ]
+        create_and_store_tweets(tweets, test_db)
+        approve_tweets([str(i) for i in range(5)], test_db)
+
+        # Use offset-based pagination
+        resp = client.get("/api/ui/chains?mode=default&sort=created_at&limit=2&offset=2")
+        data = resp.get_json()
+
+        assert len(data["chains"]) == 2
+        # Should return cursors even with offset-based pagination
+        assert data["oldest_cursor"] is not None
+        assert data["newest_cursor"] is not None
+
+    def test_empty_results_return_null_cursors(self, client, test_db):
+        """Empty results should return null cursors."""
+        resp = client.get("/api/ui/chains?mode=default")
+        data = resp.get_json()
+
+        assert data["chains"] == []
+        assert data["oldest_cursor"] is None
+        assert data["newest_cursor"] is None

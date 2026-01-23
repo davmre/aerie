@@ -1,5 +1,6 @@
 """SQLite database operations for tweet storage and classification."""
 
+import base64
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -56,6 +57,47 @@ def parse_twitter_date(date_str: str | None) -> str | None:
     except ValueError:
         # If parsing fails, return as-is
         return date_str
+
+
+# =============================================================================
+# Cursor-Based Pagination Helpers
+# =============================================================================
+
+
+def encode_cursor(created_at: str, tweet_id: str) -> str:
+    """
+    Encode (created_at, id) as a base64 JSON cursor for pagination.
+
+    The cursor uniquely identifies a position in the timeline, allowing
+    stable pagination even when new posts are added.
+
+    Args:
+        created_at: ISO timestamp of the tweet
+        tweet_id: Tweet ID
+
+    Returns:
+        URL-safe base64 encoded cursor string
+    """
+    cursor_data = json.dumps({"ts": created_at, "id": tweet_id})
+    return base64.urlsafe_b64encode(cursor_data.encode()).decode()
+
+
+def decode_cursor(cursor: str) -> tuple[str, str] | None:
+    """
+    Decode a cursor back to (created_at, id).
+
+    Args:
+        cursor: Base64 encoded cursor string
+
+    Returns:
+        Tuple of (created_at, tweet_id), or None if cursor is invalid
+    """
+    try:
+        cursor_data = base64.urlsafe_b64decode(cursor.encode()).decode()
+        data = json.loads(cursor_data)
+        return (data["ts"], data["id"])
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return None
 
 
 def init_database(db_path: Path = DEFAULT_DB_PATH):
@@ -119,6 +161,10 @@ def init_database(db_path: Path = DEFAULT_DB_PATH):
             CREATE INDEX IF NOT EXISTS idx_tweets_reply_to ON tweets(reply_to_tweet_id);
             CREATE INDEX IF NOT EXISTS idx_tweets_quoted_tweet_id ON tweets(quoted_tweet_id);
             -- Note: idx_tweets_platform is created after platform column migration
+
+            -- Composite index for cursor-based pagination (newest first)
+            CREATE INDEX IF NOT EXISTS idx_tweets_created_at_id
+                ON tweets(created_at DESC, id DESC);
 
             -- Track capture sessions for debugging/analytics
             CREATE TABLE IF NOT EXISTS capture_sessions (
@@ -1556,6 +1602,7 @@ def get_conversation_roots(
         total = count_row["cnt"]
 
         # Get paginated roots
+        # Note: We use (sort_field DESC, id DESC) for consistent ordering with cursor-based pagination
         rows = conn.execute(
             f"""
             SELECT t.* FROM tweets t
@@ -1571,13 +1618,197 @@ def get_conversation_roots(
                         AND md2.decision = 'approved'
                   )
               )
-            ORDER BY t.{sort_field} DESC
+            ORDER BY t.{sort_field} DESC, t.id DESC
             LIMIT ? OFFSET ?
             """,
             (mode_id, *platform_params, mode_id, limit, offset),
         ).fetchall()
 
         return [dict(row) for row in rows], total
+
+
+def get_conversation_roots_cursor(
+    mode_id: str,
+    sort_field: str = "created_at",
+    limit: int = 20,
+    before_cursor: str | None = None,
+    after_cursor: str | None = None,
+    platform: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> tuple[list[dict], int, str | None, str | None]:
+    """
+    Get conversation roots with cursor-based pagination.
+
+    This function supports both forward and backward pagination using cursors
+    instead of offsets. This provides stable pagination even when new posts
+    are added, preventing scroll position disruption.
+
+    Args:
+        mode_id: Mode ID for filtering approved tweets
+        sort_field: Field to sort by (created_at or captured_at)
+        limit: Number of roots to return
+        before_cursor: Load posts older than this cursor (for scrolling down)
+        after_cursor: Load posts newer than this cursor (for checking new posts)
+        platform: Optional platform filter ('twitter', 'bluesky', or None for all)
+        db_path: Database path
+
+    Returns:
+        Tuple of (list of root tweets, total count, oldest_cursor, newest_cursor)
+        The oldest_cursor can be used to load more older posts.
+        The newest_cursor can be used to check for new posts above.
+    """
+    # Validate sort field to prevent SQL injection
+    if sort_field not in ("created_at", "captured_at"):
+        sort_field = "created_at"
+
+    # Build platform filter clause
+    platform_clause = ""
+    platform_params: list[str] = []
+    if platform:
+        platform_clause = "AND t.platform = ?"
+        platform_params = [platform]
+
+    with transaction(db_path) as conn:
+        # Base query for conversation roots
+        base_where = f"""
+            md.mode_id = ? AND md.decision = 'approved'
+            {platform_clause}
+            AND (
+                t.reply_to_tweet_id IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM mode_decisions md2
+                    WHERE md2.tweet_id = t.reply_to_tweet_id
+                      AND md2.mode_id = ?
+                      AND md2.decision = 'approved'
+                )
+            )
+        """
+
+        # Count total roots (without cursor filtering)
+        count_row = conn.execute(
+            f"""
+            SELECT COUNT(*) as cnt FROM tweets t
+            JOIN mode_decisions md ON t.id = md.tweet_id
+            WHERE {base_where}
+            """,
+            (mode_id, *platform_params, mode_id),
+        ).fetchone()
+        total = count_row["cnt"]
+
+        # Build cursor clause
+        cursor_clause = ""
+        cursor_params: list[str] = []
+
+        if before_cursor:
+            # Load posts older than cursor (scrolling down)
+            decoded = decode_cursor(before_cursor)
+            if decoded:
+                ts, tid = decoded
+                cursor_clause = f"AND (t.{sort_field} < ? OR (t.{sort_field} = ? AND t.id < ?))"
+                cursor_params = [ts, ts, tid]
+        elif after_cursor:
+            # Load posts newer than cursor (checking for new posts)
+            decoded = decode_cursor(after_cursor)
+            if decoded:
+                ts, tid = decoded
+                cursor_clause = f"AND (t.{sort_field} > ? OR (t.{sort_field} = ? AND t.id > ?))"
+                cursor_params = [ts, ts, tid]
+
+        # Get paginated roots
+        rows = conn.execute(
+            f"""
+            SELECT t.* FROM tweets t
+            JOIN mode_decisions md ON t.id = md.tweet_id
+            WHERE {base_where}
+              {cursor_clause}
+            ORDER BY t.{sort_field} DESC, t.id DESC
+            LIMIT ?
+            """,
+            (mode_id, *platform_params, mode_id, *cursor_params, limit),
+        ).fetchall()
+
+        roots = [dict(row) for row in rows]
+
+        # Generate cursors for the returned results
+        oldest_cursor = None
+        newest_cursor = None
+
+        if roots:
+            # Newest cursor points to the first (most recent) item
+            first_root = roots[0]
+            newest_cursor = encode_cursor(
+                first_root.get(sort_field) or "",
+                first_root["id"]
+            )
+
+            # Oldest cursor points to the last (oldest) item
+            last_root = roots[-1]
+            oldest_cursor = encode_cursor(
+                last_root.get(sort_field) or "",
+                last_root["id"]
+            )
+
+        return roots, total, oldest_cursor, newest_cursor
+
+
+def count_conversation_roots_after_cursor(
+    mode_id: str,
+    after_cursor: str,
+    sort_field: str = "created_at",
+    platform: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """
+    Count conversation roots newer than a cursor (for "N new posts" banner).
+
+    Args:
+        mode_id: Mode ID for filtering approved tweets
+        after_cursor: Count posts newer than this cursor
+        sort_field: Field to sort by (created_at or captured_at)
+        platform: Optional platform filter
+
+    Returns:
+        Count of new conversation roots
+    """
+    decoded = decode_cursor(after_cursor)
+    if not decoded:
+        return 0
+
+    ts, tid = decoded
+
+    # Validate sort field
+    if sort_field not in ("created_at", "captured_at"):
+        sort_field = "created_at"
+
+    # Build platform filter
+    platform_clause = ""
+    platform_params: list[str] = []
+    if platform:
+        platform_clause = "AND t.platform = ?"
+        platform_params = [platform]
+
+    with transaction(db_path) as conn:
+        count_row = conn.execute(
+            f"""
+            SELECT COUNT(*) as cnt FROM tweets t
+            JOIN mode_decisions md ON t.id = md.tweet_id
+            WHERE md.mode_id = ? AND md.decision = 'approved'
+              {platform_clause}
+              AND (
+                  t.reply_to_tweet_id IS NULL
+                  OR NOT EXISTS (
+                      SELECT 1 FROM mode_decisions md2
+                      WHERE md2.tweet_id = t.reply_to_tweet_id
+                        AND md2.mode_id = ?
+                        AND md2.decision = 'approved'
+                  )
+              )
+              AND (t.{sort_field} > ? OR (t.{sort_field} = ? AND t.id > ?))
+            """,
+            (mode_id, *platform_params, mode_id, ts, ts, tid),
+        ).fetchone()
+
+        return count_row["cnt"]
 
 
 def get_approved_descendants(
