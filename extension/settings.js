@@ -6,7 +6,8 @@ const DEFAULTS = {
     mode: "default",
     pollInterval: 3000,
     pendingOpacity: 0.02,
-    filteredOpacity: 0.02
+    filteredOpacity: 0.02,
+    collectOnly: false
 };
 
 // DOM elements
@@ -16,6 +17,7 @@ const authUsernameInput = document.getElementById('authUsername');
 const authPasswordInput = document.getElementById('authPassword');
 const modeSelect = document.getElementById('mode');
 const pollIntervalInput = document.getElementById('pollInterval');
+const collectOnlyInput = document.getElementById('collectOnly');
 const pendingOpacityInput = document.getElementById('pendingOpacity');
 const filteredOpacityInput = document.getElementById('filteredOpacity');
 const pendingOpacityValue = document.getElementById('pendingOpacity-value');
@@ -41,10 +43,12 @@ async function loadSettings() {
     authPasswordInput.value = settings.authPassword || "";
     modeSelect.value = settings.mode;
     pollIntervalInput.value = settings.pollInterval;
+    collectOnlyInput.checked = settings.collectOnly;
     pendingOpacityInput.value = settings.pendingOpacity;
     filteredOpacityInput.value = settings.filteredOpacity;
 
     updateOpacityDisplay();
+    updateCollectOnlyState();
     await loadModes(settings.backendUrl, settings.authUsername, settings.authPassword, settings.mode);
 }
 
@@ -91,6 +95,14 @@ function updateOpacityDisplay() {
     filteredOpacityValue.textContent = filteredOpacityInput.value;
 }
 
+// Update UI state based on collect-only mode
+function updateCollectOnlyState() {
+    const disabled = collectOnlyInput.checked;
+    // Disable appearance settings when collect-only (they have no effect)
+    pendingOpacityInput.disabled = disabled;
+    filteredOpacityInput.disabled = disabled;
+}
+
 // Save settings
 async function saveSettings(e) {
     e.preventDefault();
@@ -101,6 +113,7 @@ async function saveSettings(e) {
         authPassword: authPasswordInput.value,
         mode: modeSelect.value,
         pollInterval: parseInt(pollIntervalInput.value, 10),
+        collectOnly: collectOnlyInput.checked,
         pendingOpacity: parseFloat(pendingOpacityInput.value),
         filteredOpacity: parseFloat(filteredOpacityInput.value)
     };
@@ -147,6 +160,7 @@ form.addEventListener('submit', saveSettings);
 resetBtn.addEventListener('click', resetSettings);
 pendingOpacityInput.addEventListener('input', updateOpacityDisplay);
 filteredOpacityInput.addEventListener('input', updateOpacityDisplay);
+collectOnlyInput.addEventListener('change', updateCollectOnlyState);
 
 // Reload modes when backend URL or auth changes
 let modeLoadTimeout;

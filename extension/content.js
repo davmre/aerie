@@ -9,7 +9,8 @@ const DEFAULTS = {
   mode: "default",
   pollInterval: 3000,
   pendingOpacity: 0.02,
-  filteredOpacity: 0.02
+  filteredOpacity: 0.02,
+  collectOnly: false
 };
 
 // Current settings (loaded from storage)
@@ -333,6 +334,13 @@ async function init() {
 
   // Load settings first
   await loadSettings();
+
+  // In collect-only mode, skip all hide/show logic
+  // Tweets are still collected by background.js, just not filtered in the browser
+  if (settings.collectOnly) {
+    console.log('[Aerie] Collect-only mode enabled - tweets will not be hidden');
+    return;
+  }
 
   // Pre-load cache with classified tweets (reduces network requests)
   await preloadCache();

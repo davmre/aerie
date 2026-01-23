@@ -9,7 +9,8 @@ const DEFAULTS = {
   mode: "default",
   pollInterval: 3000,
   pendingOpacity: 0.02,
-  filteredOpacity: 0.02
+  filteredOpacity: 0.02,
+  collectOnly: false
 };
 
 // Current settings (loaded from storage)
