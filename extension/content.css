@@ -7,19 +7,20 @@
 }
 
 /* Pending/unknown tweets: controlled by settings */
-article[data-testid="tweet"] {
+/* Only apply when aerie-active class is on root (not in collect-only mode) */
+.aerie-active article[data-testid="tweet"] {
   opacity: var(--aerie-pending-opacity) !important;
 }
 
 /* Approved tweets: full color, full opacity */
-article[data-testid="tweet"].aerie-approved,
-article[data-testid="tweet"][data-aerie-status="approved"] {
+.aerie-active article[data-testid="tweet"].aerie-approved,
+.aerie-active article[data-testid="tweet"][data-aerie-status="approved"] {
   filter: none !important;
   opacity: 1 !important;
 }
 
 /* Filtered tweets: controlled by settings */
-article[data-testid="tweet"].aerie-filtered,
-article[data-testid="tweet"][data-aerie-status="filtered"] {
+.aerie-active article[data-testid="tweet"].aerie-filtered,
+.aerie-active article[data-testid="tweet"][data-aerie-status="filtered"] {
   opacity: var(--aerie-filtered-opacity) !important;
 }

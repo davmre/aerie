@@ -342,6 +342,9 @@ async function init() {
     return;
   }
 
+  // Enable CSS rules for hiding/showing tweets
+  document.documentElement.classList.add('aerie-active');
+
   // Pre-load cache with classified tweets (reduces network requests)
   await preloadCache();
 
