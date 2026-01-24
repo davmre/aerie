@@ -63,6 +63,58 @@ Return ONLY the updated context text, nothing else."""
 # =============================================================================
 
 
+def build_context_prompt(
+    hours: int = 48,
+    token_limit: int = 2000,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict:
+    """
+    Build the context update prompt without calling the LLM.
+
+    Useful for previewing what will be sent to the LLM.
+
+    Args:
+        hours: Hours of recent posts to include
+        token_limit: Target token limit for the context
+        db_path: Database path
+
+    Returns:
+        Dict with:
+        - prompt: The full formatted prompt
+        - current_context: The current context text (or placeholder)
+        - tweet_count: Number of tweets included
+        - char_count: Total characters in the prompt
+    """
+    init_database(db_path)
+
+    # Get current context
+    current_context = get_current_context(db_path)
+    current_text = current_context["text"] if current_context else "(No previous context)"
+
+    # Get recent tweets
+    tweets = get_recent_tweets_for_context(hours=hours, limit=500, db_path=db_path)
+
+    # Format tweets for the prompt
+    tweets_text = format_tweets_for_context(tweets)
+    char_limit = token_limit * 4
+
+    # Build the prompt
+    prompt = CONTEXT_UPDATE_PROMPT.format(
+        current_context=current_text,
+        recent_posts=tweets_text,
+        token_limit=token_limit,
+        char_limit=char_limit,
+    )
+
+    return {
+        "prompt": prompt,
+        "current_context": current_text,
+        "tweet_count": len(tweets),
+        "char_count": len(prompt),
+        "token_estimate": len(prompt) // 4,
+    }
+
+
 def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str:
     """
     Format tweets for inclusion in the context update prompt.

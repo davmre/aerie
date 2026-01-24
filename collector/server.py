@@ -1197,6 +1197,32 @@ def create_app(config=None):
             "previous_context_id": result.get("previous_context_id"),
         })
 
+    @app.route("/api/context/preview", methods=["POST"])
+    def api_preview_context_prompt():
+        """
+        Preview the prompt that would be sent to the LLM for context generation.
+
+        Request body (all optional):
+        {
+            "hours": 48,
+            "token_limit": 2000
+        }
+
+        Returns the full prompt text without calling the LLM.
+        """
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        from context_updater import build_context_prompt
+
+        result = build_context_prompt(
+            hours=data.get("hours", 48),
+            token_limit=data.get("token_limit", 2000),
+            db_path=db_path,
+        )
+
+        return jsonify(result)
+
     @app.route("/api/context/history", methods=["GET"])
     def api_context_history():
         """
