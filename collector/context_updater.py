@@ -365,7 +365,9 @@ def update_context(
 
         new_context_text = first_block.text.strip()
 
-    except Exception as e:
+    except anthropic.APIError as e:
+        return {"error": f"LLM API error: {e}"}
+    except (ImportError, ValueError) as e:
         return {"error": f"LLM call failed: {e}"}
 
     # Estimate token count

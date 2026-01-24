@@ -6,7 +6,6 @@ A simple Flask server that receives tweets from the browser extension
 and stores them in SQLite for later classification.
 """
 
-import json
 import threading
 import time
 from pathlib import Path
@@ -73,6 +72,7 @@ from modes import (
     run_prefilters_for_new_tweets,
 )
 from prefilters import PREFILTER_SCHEMAS, list_prefilter_schemas
+from utils.config_utils import parse_json_config
 
 
 def get_db_path() -> Path:
@@ -218,7 +218,9 @@ def start_classification_worker(db_path: Path, config: dict):
                     queue.mark_complete([j.tweet_id for j in jobs])
 
                 except Exception as e:
-                    print(f"[Worker] Error: {e}")
+                    # Log full exception for background worker errors (keep worker alive)
+                    import logging
+                    logging.getLogger("aerie.worker").exception(f"Worker error: {e}")
                     time.sleep(1)  # Backoff on error
 
         _worker_thread = threading.Thread(target=worker_loop, daemon=True)
@@ -452,15 +454,13 @@ def create_app(config=None):
         """Parse JSON config fields in a mode record."""
         mode = dict(mode)  # Copy to avoid mutating original
         if mode.get("extractor_config"):
-            try:
-                mode["extractor_config"] = json.loads(mode["extractor_config"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+            parsed = parse_json_config(mode["extractor_config"])
+            if parsed is not None:
+                mode["extractor_config"] = parsed
         if mode.get("prefilter_config"):
-            try:
-                mode["prefilter_config"] = json.loads(mode["prefilter_config"])
-            except (json.JSONDecodeError, TypeError):
-                pass
+            parsed = parse_json_config(mode["prefilter_config"])
+            if parsed is not None:
+                mode["prefilter_config"] = parsed
         return mode
 
     @app.route("/api/modes", methods=["GET"])

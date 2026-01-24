@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,8 +60,9 @@ def get_api_key_from_settings(provider_name: str, db_path: Path | None = None) -
 
         path = db_path or DEFAULT_DB_PATH
         return get_setting(setting_key, path)
-    except Exception:
+    except (sqlite3.Error, OSError) as e:
         # If database isn't available, return None
+        logger.debug(f"Could not read API key from database: {e}")
         return None
 
 
@@ -88,7 +90,8 @@ def set_api_key_in_settings(
         path = db_path or DEFAULT_DB_PATH
         set_setting(setting_key, api_key, path)
         return True
-    except Exception:
+    except (sqlite3.Error, OSError) as e:
+        logger.warning(f"Failed to save API key to database: {e}")
         return False
 
 
@@ -113,7 +116,8 @@ def delete_api_key_from_settings(provider_name: str, db_path: Path | None = None
         path = db_path or DEFAULT_DB_PATH
         delete_setting(setting_key, path)
         return True
-    except Exception:
+    except (sqlite3.Error, OSError) as e:
+        logger.warning(f"Failed to delete API key from database: {e}")
         return False
 
 

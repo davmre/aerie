@@ -6,6 +6,7 @@ a tweet should be shown for a given mode, using prefilters and extractors.
 """
 
 import json
+import logging
 from pathlib import Path
 
 from database import (
@@ -22,16 +23,9 @@ from database import (
 )
 from extractors import get_extractor_with_config
 from prefilters import get_prefilter_with_config
+from utils.config_utils import is_error_response, parse_json_config
 
-
-def _parse_config(config_json: str | None) -> dict | None:
-    """Parse JSON config, returning None if empty or invalid."""
-    if not config_json:
-        return None
-    try:
-        return json.loads(config_json)
-    except (json.JSONDecodeError, TypeError):
-        return None
+logger = logging.getLogger("aerie.modes")
 
 
 class NeedsClassification(Exception):
@@ -70,8 +64,8 @@ def decide_tweet(
         raise KeyError(f"Mode not found: {mode_id}")
 
     # Parse configs
-    prefilter_config = _parse_config(mode.get("prefilter_config"))
-    extractor_config = _parse_config(mode.get("extractor_config"))
+    prefilter_config = parse_json_config(mode.get("prefilter_config"))
+    extractor_config = parse_json_config(mode.get("extractor_config"))
 
     # 1. Try prefilter first (fast, no LLM needed)
     if mode["prefilter"]:
@@ -92,7 +86,7 @@ def decide_tweet(
     response = response_record["response"]
 
     # Check for error responses
-    if isinstance(response, dict) and response.get("_error"):
+    if is_error_response(response):
         # Error response - treat as needs classification
         raise NeedsClassification(tweet["id"], mode["prompt_id"])
 
@@ -124,8 +118,8 @@ def decide_tweets_batch(
         raise KeyError(f"Mode not found: {mode_id}")
 
     # Parse configs
-    prefilter_config = _parse_config(mode.get("prefilter_config"))
-    extractor_config = _parse_config(mode.get("extractor_config"))
+    prefilter_config = parse_json_config(mode.get("prefilter_config"))
+    extractor_config = parse_json_config(mode.get("extractor_config"))
 
     # Get tweets
     tweets = get_tweets_batch(tweet_ids, db_path)
@@ -168,7 +162,7 @@ def decide_tweets_batch(
         response = response_record["response"]
 
         # Check for error responses
-        if isinstance(response, dict) and response.get("_error"):
+        if is_error_response(response):
             results[tweet_id] = "pending"
             continue
 
@@ -176,8 +170,9 @@ def decide_tweets_batch(
         try:
             approved = extractor_fn(response)
             results[tweet_id] = "approved" if approved else "filtered"
-        except Exception:
+        except (KeyError, TypeError, ValueError) as e:
             # Extractor failed - treat as pending
+            logger.debug(f"Extractor failed for tweet {tweet_id}: {e}")
             results[tweet_id] = "pending"
 
     return results
@@ -235,8 +230,8 @@ def compute_mode_decisions(
         raise KeyError(f"Mode not found: {mode_id}")
 
     # Parse configs
-    prefilter_config = _parse_config(mode.get("prefilter_config"))
-    extractor_config = _parse_config(mode.get("extractor_config"))
+    prefilter_config = parse_json_config(mode.get("prefilter_config"))
+    extractor_config = parse_json_config(mode.get("extractor_config"))
 
     prefilter_fn = (
         get_prefilter_with_config(mode["prefilter"], prefilter_config)
@@ -326,7 +321,7 @@ def compute_mode_decisions(
         # Apply extractor to prompt response
         try:
             response = json.loads(tweet["response_json"])
-            if isinstance(response, dict) and response.get("_error"):
+            if is_error_response(response):
                 continue  # Skip error responses, they stay pending
 
             approved = extractor_fn(response)
@@ -338,7 +333,8 @@ def compute_mode_decisions(
                     "source": "extractor",
                 }
             )
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+            logger.debug(f"Skipping tweet {tweet_id} due to error: {e}")
             continue  # Skip on error
 
     if decisions_to_store:
@@ -462,8 +458,8 @@ def compute_mode_decisions_for_tweets(
         mode_model = mode.get("model_name") or model
 
         # Parse configs
-        prefilter_config = _parse_config(mode.get("prefilter_config"))
-        extractor_config = _parse_config(mode.get("extractor_config"))
+        prefilter_config = parse_json_config(mode.get("prefilter_config"))
+        extractor_config = parse_json_config(mode.get("extractor_config"))
 
         prefilter_fn = (
             get_prefilter_with_config(mode["prefilter"], prefilter_config)
@@ -505,7 +501,7 @@ def compute_mode_decisions_for_tweets(
             response = response_record["response"]
 
             # Check for error responses
-            if isinstance(response, dict) and response.get("_error"):
+            if is_error_response(response):
                 continue  # Leave as pending
 
             # Apply extractor
@@ -521,7 +517,8 @@ def compute_mode_decisions_for_tweets(
                         "source": "extractor",
                     }
                 )
-            except Exception:
+            except (KeyError, TypeError, ValueError) as e:
+                logger.debug(f"Extractor failed for tweet {tweet_id} in mode {mode_id}: {e}")
                 continue  # Leave as pending on error
 
     # Store all decisions
@@ -571,7 +568,7 @@ def run_prefilters_for_new_tweets(
             continue
 
         # Parse prefilter config
-        prefilter_config = _parse_config(mode.get("prefilter_config"))
+        prefilter_config = parse_json_config(mode.get("prefilter_config"))
         prefilter_fn = get_prefilter_with_config(mode["prefilter"], prefilter_config)
 
         if not prefilter_fn:

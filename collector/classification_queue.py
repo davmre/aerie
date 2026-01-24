@@ -181,7 +181,7 @@ class ClassificationQueue:
                     items.append(item)
                     if item.mode_id == mode_id:
                         count += 1
-                except Exception:
+                except queue.Empty:
                     break
 
             # Put items back

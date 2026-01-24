@@ -38,8 +38,40 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["database", "modes", "extractors", "prefilters"]
+known-first-party = ["database", "modes", "extractors", "prefilters", "types", "utils"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-v --tb=short"
+testpaths = ["tests"]
+markers = [
+    "integration: marks tests as integration tests (may be slow)",
+    "slow: marks tests as slow running",
+]
+filterwarnings = [
+    # Ignore deprecation warnings from datetime.utcnow() - tracked for future fix
+    "ignore:datetime.datetime.utcnow:DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "*/__pycache__/*",
+    "migrate_*.py",  # One-time migration scripts
+]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+show_missing = true
+skip_covered = true
