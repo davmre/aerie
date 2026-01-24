@@ -21,6 +21,7 @@ import argparse
 import re
 from pathlib import Path
 
+from classifier import format_chain_for_classification
 from database import (
     DEFAULT_DB_PATH,
     create_context,
@@ -115,35 +116,132 @@ def build_context_prompt(
     }
 
 
+def group_tweets_into_threads(tweets: list[dict]) -> list[list[dict]]:
+    """
+    Group tweets into conversation threads.
+
+    Finds conversation roots (tweets with no parent in the set) and builds
+    chains by following replies.
+
+    Args:
+        tweets: List of tweet dicts
+
+    Returns:
+        List of threads, where each thread is a list of tweets in chronological order
+    """
+    if not tweets:
+        return []
+
+    # Build lookup structures
+    tweet_by_id = {t["id"]: t for t in tweets}
+    children_by_parent: dict[str, list[dict]] = {}
+
+    for tweet in tweets:
+        parent_id = tweet.get("reply_to_tweet_id")
+        if parent_id:
+            if parent_id not in children_by_parent:
+                children_by_parent[parent_id] = []
+            children_by_parent[parent_id].append(tweet)
+
+    # Find roots: tweets with no parent in our set
+    roots = []
+    for tweet in tweets:
+        parent_id = tweet.get("reply_to_tweet_id")
+        if not parent_id or parent_id not in tweet_by_id:
+            roots.append(tweet)
+
+    # Sort roots by created_at descending (newest first)
+    roots.sort(key=lambda t: t.get("created_at", ""), reverse=True)
+
+    # Build threads from each root
+    threads = []
+    visited = set()
+
+    def build_chain(tweet: dict) -> list[dict]:
+        """Recursively build chain from a tweet, picking longest path."""
+        if tweet["id"] in visited:
+            return []
+        visited.add(tweet["id"])
+
+        chain = [tweet]
+        children = children_by_parent.get(tweet["id"], [])
+
+        if children:
+            # Sort children by created_at to process in order
+            children.sort(key=lambda t: t.get("created_at", ""))
+
+            # Find the longest child chain
+            best_child_chain: list[dict] = []
+            for child in children:
+                child_chain = build_chain(child)
+                if len(child_chain) > len(best_child_chain):
+                    best_child_chain = child_chain
+
+            chain.extend(best_child_chain)
+
+        return chain
+
+    for root in roots:
+        if root["id"] not in visited:
+            thread = build_chain(root)
+            if thread:
+                threads.append(thread)
+
+    return threads
+
+
 def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str:
     """
     Format tweets for inclusion in the context update prompt.
+
+    Groups tweets into conversation threads and formats each thread using
+    the same format used for classification, so the LLM sees proper context.
 
     Args:
         tweets: List of tweet dicts
         max_chars: Maximum characters to include
 
     Returns:
-        Formatted string of tweets
+        Formatted string of tweets grouped by threads
     """
-    lines = []
+    if not tweets:
+        return "(No recent posts)"
+
+    # Group into threads
+    threads = group_tweets_into_threads(tweets)
+
+    if not threads:
+        return "(No recent posts)"
+
+    # Format each thread
+    parts = []
     total_chars = 0
+    thread_count = 0
 
-    for tweet in tweets:
-        author = tweet.get("author_username") or "unknown"
-        text = tweet.get("text", "")[:500]  # Truncate very long tweets
-        created_at = tweet.get("created_at", "")[:10]  # Just the date
+    for thread in threads:
+        # Format thread using the same function as classification
+        thread_text = format_chain_for_classification(thread)
 
-        line = f"@{author} ({created_at}): {text}"
-        line_len = len(line) + 2  # +2 for newlines
+        # Add thread separator
+        separator = f"\n{'='*40}\n" if parts else ""
+        formatted = separator + thread_text
+        formatted_len = len(formatted)
 
-        if total_chars + line_len > max_chars:
+        if total_chars + formatted_len > max_chars:
             break
 
-        lines.append(line)
-        total_chars += line_len
+        parts.append(formatted)
+        total_chars += formatted_len
+        thread_count += 1
 
-    return "\n".join(lines)
+    result = "".join(parts)
+
+    # Add summary header
+    standalone = sum(1 for t in threads if len(t) == 1)
+    multi = len(threads) - standalone
+    header = f"({thread_count} conversation{'s' if thread_count != 1 else ''}: {standalone} standalone posts, {multi} threads)\n\n"
+
+    return header + result
 
 
 def estimate_tokens(text: str) -> int:
