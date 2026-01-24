@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from logging_config import truncate_for_log
+
 # Get logger for provider operations
 logger = logging.getLogger("aerie.providers")
 
@@ -352,8 +354,8 @@ class AnthropicProvider(LLMProvider):
         logger.debug(
             "Anthropic API request\n"
             f"  model: {actual_model}\n"
-            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
-            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  system_prompt: {truncate_for_log(system_prompt, 200)}\n"
+            f"  user_message: {truncate_for_log(user_message, 500)}\n"
             f"  max_tokens: {max_tokens}"
         )
 
@@ -373,10 +375,7 @@ class AnthropicProvider(LLMProvider):
 
             # Log response
             response_text = first_block.text
-            logger.debug(
-                f"Anthropic API response: ({len(response_text)} chars) "
-                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
-            )
+            logger.debug(f"Anthropic API response: {truncate_for_log(response_text, 500)}")
 
             return self.parse_json_response(response_text)
 
@@ -403,8 +402,8 @@ class AnthropicProvider(LLMProvider):
             "Anthropic API batch request\n"
             f"  model: {actual_model}\n"
             f"  batch_size: {len(expected_ids)}\n"
-            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
-            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  system_prompt: {truncate_for_log(system_prompt, 200)}\n"
+            f"  user_message: {truncate_for_log(user_message, 500)}\n"
             f"  max_tokens: {max_tokens}"
         )
 
@@ -432,10 +431,7 @@ class AnthropicProvider(LLMProvider):
 
             # Log response
             response_text = first_block.text
-            logger.debug(
-                f"Anthropic API batch response: ({len(response_text)} chars) "
-                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
-            )
+            logger.debug(f"Anthropic API batch response: {truncate_for_log(response_text, 500)}")
 
             return self.parse_batch_response(response_text, expected_ids)
 
@@ -511,8 +507,8 @@ class GeminiProvider(LLMProvider):
         logger.debug(
             "Gemini API request\n"
             f"  model: {actual_model}\n"
-            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
-            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  system_prompt: {truncate_for_log(system_prompt, 200)}\n"
+            f"  user_message: {truncate_for_log(user_message, 500)}\n"
             f"  max_tokens: {max_tokens}"
         )
 
@@ -533,10 +529,7 @@ class GeminiProvider(LLMProvider):
 
             # Log response
             response_text = response.text
-            logger.debug(
-                f"Gemini API response: ({len(response_text)} chars) "
-                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
-            )
+            logger.debug(f"Gemini API response: {truncate_for_log(response_text, 500)}")
 
             return self.parse_json_response(response_text)
 
@@ -577,8 +570,8 @@ class GeminiProvider(LLMProvider):
             "Gemini API batch request\n"
             f"  model: {actual_model}\n"
             f"  batch_size: {len(expected_ids)}\n"
-            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
-            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  system_prompt: {truncate_for_log(system_prompt, 200)}\n"
+            f"  user_message: {truncate_for_log(user_message, 500)}\n"
             f"  max_tokens: {max_tokens}"
         )
 
@@ -602,10 +595,7 @@ class GeminiProvider(LLMProvider):
 
             # Log response
             response_text = response.text
-            logger.debug(
-                f"Gemini API batch response: ({len(response_text)} chars) "
-                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
-            )
+            logger.debug(f"Gemini API batch response: {truncate_for_log(response_text, 500)}")
 
             return self.parse_batch_response(response_text, expected_ids)
 

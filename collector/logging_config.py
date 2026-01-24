@@ -7,6 +7,7 @@ Logging is configured via environment variables following the AERIE_* pattern.
 Environment Variables:
     AERIE_LOG_LEVEL: Minimum log level (DEBUG, INFO, WARNING, ERROR). Default: INFO
     AERIE_LOG_FILE: Optional file path for persistent logs
+    AERIE_LOG_TRUNCATE: Truncate long strings in logs (default: true). Set to "0" or "false" for full content.
 
 Logger Hierarchy:
     aerie           - Root logger for the project
@@ -17,6 +18,9 @@ Logger Hierarchy:
 Usage:
     from logging_config import setup_logging
     setup_logging()  # Call once at startup
+
+    # For full request/response content:
+    AERIE_LOG_TRUNCATE=0 AERIE_LOG_LEVEL=DEBUG python classifier.py classify
 """
 
 import logging
@@ -85,3 +89,29 @@ def get_logger(name: str) -> logging.Logger:
     if not name.startswith("aerie."):
         name = f"aerie.{name}"
     return logging.getLogger(name)
+
+
+def should_truncate_logs() -> bool:
+    """Check if log truncation is enabled (default: True)."""
+    value = os.environ.get("AERIE_LOG_TRUNCATE", "1").lower()
+    return value not in ("0", "false", "no", "off")
+
+
+def truncate_for_log(text: str, max_length: int) -> str:
+    """
+    Truncate text for logging, respecting AERIE_LOG_TRUNCATE setting.
+
+    Args:
+        text: The text to potentially truncate
+        max_length: Maximum length before truncation (ignored if truncation disabled)
+
+    Returns:
+        Original text or truncated version with char count prefix
+    """
+    if not should_truncate_logs():
+        return f"({len(text)} chars)\n{text}"
+
+    if len(text) <= max_length:
+        return f"({len(text)} chars) {text}"
+
+    return f"({len(text)} chars) {text[:max_length]}..."
