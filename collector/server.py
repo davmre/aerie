@@ -22,13 +22,16 @@ from database import (
     compute_single_chain,
     count_conversation_roots_after_cursor,
     count_modes_using_prompt,
+    create_context,
     create_mode,
     create_prompt,
     delete_mode,
     delete_prompt,
     delete_setting,
+    get_context,
     get_conversation_roots,
     get_conversation_roots_cursor,
+    get_current_context,
     get_mode,
     get_mode_decisions_batch,
     get_mode_label_counts,
@@ -45,12 +48,15 @@ from database import (
     get_tweets_batch,
     get_tweets_without_decision_filtered,
     invalidate_mode_decisions,
+    list_contexts,
     list_modes,
     list_prompts,
+    set_current_context,
     set_setting,
     store_retweets,
     store_tweets,
     transaction,
+    update_context_text,
     update_mode,
     update_prompt,
 )
@@ -1083,6 +1089,202 @@ def create_app(config=None):
             return jsonify({"error": f"Test failed: {e!s}"}), 500
 
     # =========================================================================
+    # Context Management API
+    # =========================================================================
+
+    @app.route("/api/context", methods=["GET"])
+    def api_get_context():
+        """
+        Get the current context.
+
+        Returns the current active context, or null if none is set.
+        """
+        db_path = get_db_path()
+        context = get_current_context(db_path)
+
+        if not context:
+            return jsonify({"context": None})
+
+        return jsonify({"context": context})
+
+    @app.route("/api/context", methods=["PUT"])
+    def api_update_context():
+        """
+        Create or update the current context.
+
+        Request body:
+        {
+            "text": "The context text...",
+            "context_id": "optional - if provided, updates existing context"
+        }
+
+        If context_id is provided, updates that context in-place.
+        Otherwise, creates a new context and sets it as current.
+        """
+        db_path = get_db_path()
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        text = data.get("text", "").strip()
+        if not text:
+            return jsonify({"error": "Context text is required"}), 400
+
+        context_id = data.get("context_id")
+
+        # Estimate token count
+        token_count = len(text) // 4
+
+        if context_id:
+            # Update existing context
+            success = update_context_text(context_id, text, token_count, db_path)
+            if not success:
+                return jsonify({"error": "Context not found"}), 404
+
+            # Ensure it's set as current
+            set_current_context(context_id, db_path)
+
+            context = get_context(context_id, db_path)
+            return jsonify({"status": "ok", "context": context})
+        else:
+            # Create new context
+            new_context_id = create_context(
+                text=text,
+                token_count=token_count,
+                metadata={"source": "manual"},
+                db_path=db_path,
+            )
+            set_current_context(new_context_id, db_path)
+
+            context = get_context(new_context_id, db_path)
+            return jsonify({"status": "ok", "context": context})
+
+    @app.route("/api/context/refresh", methods=["POST"])
+    def api_refresh_context():
+        """
+        Refresh context using LLM.
+
+        Request body (all optional):
+        {
+            "provider": "anthropic",
+            "model": null,
+            "hours": 48,
+            "token_limit": 2000,
+            "max_input_tokens": 50000
+        }
+        """
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        from context_updater import update_context
+
+        result = update_context(
+            provider_name=data.get("provider"),
+            model=data.get("model"),
+            hours=data.get("hours", 48),
+            token_limit=data.get("token_limit", 2000),
+            max_input_tokens=data.get("max_input_tokens", 50000),
+            db_path=db_path,
+            verbose=False,
+        )
+
+        if "error" in result:
+            return jsonify({"error": result["error"]}), 400
+
+        # Fetch the full context object
+        context = get_context(result["context_id"], db_path)
+        return jsonify({
+            "status": "ok",
+            "context": context,
+            "previous_context_id": result.get("previous_context_id"),
+        })
+
+    @app.route("/api/context/preview", methods=["POST"])
+    def api_preview_context_prompt():
+        """
+        Preview the prompt that would be sent to the LLM for context generation.
+
+        Request body (all optional):
+        {
+            "hours": 48,
+            "token_limit": 2000,
+            "max_input_tokens": 50000
+        }
+
+        Returns the full prompt text without calling the LLM.
+        """
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        from context_updater import build_context_prompt
+
+        result = build_context_prompt(
+            hours=data.get("hours", 48),
+            token_limit=data.get("token_limit", 2000),
+            max_input_tokens=data.get("max_input_tokens", 50000),
+            db_path=db_path,
+        )
+
+        return jsonify(result)
+
+    @app.route("/api/context/history", methods=["GET"])
+    def api_context_history():
+        """
+        List previous context versions.
+
+        Query params:
+        - limit: Number of contexts to return (default: 20)
+        """
+        db_path = get_db_path()
+        limit = request.args.get("limit", 20, type=int)
+
+        contexts = list_contexts(limit=limit, db_path=db_path)
+        current = get_current_context(db_path)
+        current_id = current["id"] if current else None
+
+        # Mark which one is current
+        for ctx in contexts:
+            ctx["is_current"] = ctx["id"] == current_id
+
+        return jsonify({"contexts": contexts, "current_id": current_id})
+
+    @app.route("/api/context/<context_id>", methods=["GET"])
+    def api_get_context_by_id(context_id: str):
+        """Get a specific context by ID."""
+        db_path = get_db_path()
+        context = get_context(context_id, db_path)
+
+        if not context:
+            return jsonify({"error": "Context not found"}), 404
+
+        # Check if it's the current context
+        current = get_current_context(db_path)
+        context["is_current"] = current is not None and current["id"] == context_id
+
+        return jsonify({"context": context})
+
+    @app.route("/api/context/<context_id>/activate", methods=["POST"])
+    def api_activate_context(context_id: str):
+        """Set a context as the current active context."""
+        db_path = get_db_path()
+
+        # Verify context exists
+        context = get_context(context_id, db_path)
+        if not context:
+            return jsonify({"error": "Context not found"}), 404
+
+        set_current_context(context_id, db_path)
+
+        return jsonify({"status": "ok", "context": context})
+
+    @app.route("/api/context/clear", methods=["POST"])
+    def api_clear_context():
+        """Clear the current context (sets to null)."""
+        db_path = get_db_path()
+        set_current_context(None, db_path)
+        return jsonify({"status": "ok"})
+
+    # =========================================================================
     # Web UI Routes
     # =========================================================================
 
@@ -1126,6 +1328,13 @@ def create_app(config=None):
         db_path = get_db_path()
         modes = get_available_modes(db_path)
         return render_template("settings.html", modes=modes, active_page="settings")
+
+    @app.route("/ui/context")
+    def ui_context():
+        """Context management interface."""
+        db_path = get_db_path()
+        modes = get_available_modes(db_path)
+        return render_template("context.html", modes=modes, active_page="context")
 
     @app.route("/api/ui/tweets", methods=["GET"])
     def api_ui_tweets():

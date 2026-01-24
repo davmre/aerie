@@ -16,6 +16,7 @@ from database import (
     assemble_classification_chains,
     create_mode,
     create_prompt,
+    get_current_context,
     get_prompt,
     get_stats,
     get_tweets_without_response,
@@ -176,17 +177,6 @@ def format_tweet_for_classification(tweet: dict) -> str:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Engagement metrics
-    metrics = []
-    if tweet.get("like_count", 0) > 0:
-        metrics.append(f"{tweet['like_count']} likes")
-    if tweet.get("retweet_count", 0) > 0:
-        metrics.append(f"{tweet['retweet_count']} retweets")
-    if tweet.get("reply_count", 0) > 0:
-        metrics.append(f"{tweet['reply_count']} replies")
-    if metrics:
-        parts.append(f"[{', '.join(metrics)}]")
-
     return "\n".join(parts)
 
 
@@ -231,16 +221,15 @@ def format_chain_for_classification(tweets: list[dict]) -> str:
         # Tweet text
         parts.append(tweet.get("text", ""))
 
-        # Engagement metrics
-        metrics = []
-        if tweet.get("like_count", 0) > 0:
-            metrics.append(f"{tweet['like_count']} likes")
-        if tweet.get("retweet_count", 0) > 0:
-            metrics.append(f"{tweet['retweet_count']} retweets")
-        if tweet.get("reply_count", 0) > 0:
-            metrics.append(f"{tweet['reply_count']} replies")
-        if metrics:
-            parts.append(f"[{', '.join(metrics)}]")
+        # Quote tweet content
+        if tweet.get("is_quote"):
+            quoted = tweet.get("quoted_tweet")
+            if quoted:
+                quoted_author = quoted.get("author_username") or "unknown"
+                quoted_text = quoted.get("text", "")
+                if len(quoted_text) > 500:
+                    quoted_text = quoted_text[:500] + "..."
+                parts.append(f"[Quoting @{quoted_author}: \"{quoted_text}\"]")
 
         # Add blank line between tweets
         parts.append("")
@@ -309,7 +298,30 @@ def run_classification(
             print(f"  - {p['id']}")
         return
 
-    system_prompt = prompt["prompt_text"]
+    # Fetch current context for situational awareness
+    current_context = get_current_context(db_path)
+    context_id = current_context["id"] if current_context else None
+
+    # Build system prompt, optionally with context
+    base_prompt = prompt["prompt_text"]
+    if current_context and current_context.get("text"):
+        context_text = current_context["text"]
+        system_prompt = f"""CURRENT SITUATIONAL CONTEXT:
+{context_text}
+
+---
+
+{base_prompt}
+
+---
+
+IMPORTANT: If a tweet references topics, events, or discussions you don't have enough context to evaluate properly, include "needs_context": true in your response. This will trigger a second pass with additional context about the author and related posts."""
+        if verbose:
+            print(f"Using context: {context_id} ({len(context_text)} chars)")
+    else:
+        system_prompt = base_prompt
+        if verbose:
+            print("No context set - classifying without situational awareness")
 
     # Get stats
     stats = get_stats(db_path=db_path)
@@ -365,6 +377,7 @@ def run_classification(
                 if not dry_run:
                     # Copy parent's response with reference to parent's batch_id
                     parent_batch_id = parent_response.get("classification_batch_id")
+                    parent_context_id = parent_response.get("context_id")
                     store_prompt_response(
                         tweet["id"],
                         prompt_id,
@@ -372,6 +385,7 @@ def run_classification(
                         parent_response.get("response_json", parent_response),
                         db_path,
                         classification_batch_id=parent_batch_id,  # Inherit batch_id
+                        context_id=parent_context_id,  # Inherit context_id
                     )
 
                 inherited_count += 1
@@ -431,6 +445,9 @@ def run_classification(
         # Generate batch ID for this chain
         batch_id = str(uuid.uuid4())
 
+        # Check if LLM flagged this as needing more context
+        needs_context = response.get("needs_context", False) if isinstance(response, dict) else False
+
         # Store response for all unclassified tweets in chain
         if not dry_run:
             for tweet_id in unclassified_ids:
@@ -441,7 +458,13 @@ def run_classification(
                     response,
                     db_path,
                     classification_batch_id=batch_id,
+                    context_id=context_id,
                 )
+
+        # Track tweets that need Phase 2 context retrieval
+        # (Will be handled in Phase 2 - to be implemented in context_updater.py)
+        if needs_context and verbose:
+            print("    -> Flagged for Phase 2 context retrieval")
 
         # Update counts
         processed += len(unclassified_ids)
