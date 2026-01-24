@@ -222,8 +222,8 @@ def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str
         # Format thread using the same function as classification
         thread_text = format_chain_for_classification(thread)
 
-        # Add thread separator
-        separator = f"\n{'='*40}\n" if parts else ""
+        # Add thread separator (short for token efficiency)
+        separator = "\n===\n" if parts else ""
         formatted = separator + thread_text
         formatted_len = len(formatted)
 

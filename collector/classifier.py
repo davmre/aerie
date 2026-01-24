@@ -177,17 +177,6 @@ def format_tweet_for_classification(tweet: dict) -> str:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # Engagement metrics
-    metrics = []
-    if tweet.get("like_count", 0) > 0:
-        metrics.append(f"{tweet['like_count']} likes")
-    if tweet.get("retweet_count", 0) > 0:
-        metrics.append(f"{tweet['retweet_count']} retweets")
-    if tweet.get("reply_count", 0) > 0:
-        metrics.append(f"{tweet['reply_count']} replies")
-    if metrics:
-        parts.append(f"[{', '.join(metrics)}]")
-
     return "\n".join(parts)
 
 
@@ -232,16 +221,15 @@ def format_chain_for_classification(tweets: list[dict]) -> str:
         # Tweet text
         parts.append(tweet.get("text", ""))
 
-        # Engagement metrics
-        metrics = []
-        if tweet.get("like_count", 0) > 0:
-            metrics.append(f"{tweet['like_count']} likes")
-        if tweet.get("retweet_count", 0) > 0:
-            metrics.append(f"{tweet['retweet_count']} retweets")
-        if tweet.get("reply_count", 0) > 0:
-            metrics.append(f"{tweet['reply_count']} replies")
-        if metrics:
-            parts.append(f"[{', '.join(metrics)}]")
+        # Quote tweet content
+        if tweet.get("is_quote"):
+            quoted = tweet.get("quoted_tweet")
+            if quoted:
+                quoted_author = quoted.get("author_username") or "unknown"
+                quoted_text = quoted.get("text", "")
+                if len(quoted_text) > 500:
+                    quoted_text = quoted_text[:500] + "..."
+                parts.append(f"[Quoting @{quoted_author}: \"{quoted_text}\"]")
 
         # Add blank line between tweets
         parts.append("")

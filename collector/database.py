@@ -1566,7 +1566,7 @@ def get_recent_tweets_for_context(
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict]:
     """
-    Get recent tweets for context generation.
+    Get recent tweets for context generation, with quoted tweets attached.
 
     Args:
         hours: Look back this many hours
@@ -1574,7 +1574,7 @@ def get_recent_tweets_for_context(
         db_path: Database path
 
     Returns:
-        List of tweet dicts, ordered by created_at DESC
+        List of tweet dicts with quoted_tweet populated, ordered by created_at DESC
     """
     with transaction(db_path) as conn:
         rows = conn.execute(
@@ -1586,7 +1586,24 @@ def get_recent_tweets_for_context(
             """,
             (f"-{hours} hours", limit),
         ).fetchall()
-        return [dict(row) for row in rows]
+        tweets = [dict(row) for row in rows]
+
+        # Collect quoted tweet IDs and fetch them
+        quoted_ids = [t["quoted_tweet_id"] for t in tweets if t.get("quoted_tweet_id")]
+        if quoted_ids:
+            placeholders = ",".join("?" * len(quoted_ids))
+            quoted_rows = conn.execute(
+                f"SELECT * FROM tweets WHERE id IN ({placeholders})",
+                quoted_ids,
+            ).fetchall()
+            quoted_by_id = {row["id"]: dict(row) for row in quoted_rows}
+
+            # Attach quoted tweets
+            for tweet in tweets:
+                if tweet.get("quoted_tweet_id"):
+                    tweet["quoted_tweet"] = quoted_by_id.get(tweet["quoted_tweet_id"])
+
+        return tweets
 
 
 def get_tweets_by_author(
