@@ -25,6 +25,7 @@ from database import (
     list_prompts,
     store_prompt_response,
 )
+from logging_config import setup_logging
 from modes import compute_all_mode_decisions
 from providers import get_default_provider, get_provider, list_providers
 
@@ -355,7 +356,7 @@ IMPORTANT: If a tweet references topics, events, or discussions you don't have e
         print("No tweets to classify.")
         return
 
-    print(f"Step 1: Checking for tweets that can inherit classifications...")
+    print("Step 1: Checking for tweets that can inherit classifications...")
 
     # First pass: Apply inheritance logic
     # Tweets that reply to classified tweets inherit their parent's classification
@@ -403,13 +404,13 @@ IMPORTANT: If a tweet references topics, events, or discussions you don't have e
         return
 
     # Second pass: Assemble chains and classify
-    print(f"Step 2: Assembling conversation chains...")
+    print("Step 2: Assembling conversation chains...")
     chains = assemble_classification_chains(tweets_needing_llm, prompt_id, actual_model, db_path)
     print(f"  Assembled {len(chains)} conversation chains")
     print()
 
     # Process chains
-    print(f"Step 3: Classifying conversation chains...")
+    print("Step 3: Classifying conversation chains...")
     processed = 0
     success_count = 0
     error_count = 0
@@ -663,6 +664,11 @@ def main():
         default=DEFAULT_DB_PATH,
         help=f"Database path (default: {DEFAULT_DB_PATH})",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO, or AERIE_LOG_LEVEL env var)",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -752,6 +758,9 @@ def main():
     recompute_parser.set_defaults(func=cmd_recompute_decisions)
 
     args = parser.parse_args()
+
+    # Initialize logging
+    setup_logging(args.log_level)
 
     if args.command is None:
         # Default to classify with default prompt

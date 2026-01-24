@@ -13,12 +13,16 @@ Usage:
 """
 
 import json
+import logging
 import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+# Get logger for provider operations
+logger = logging.getLogger("aerie.providers")
 
 
 # =============================================================================
@@ -340,22 +344,44 @@ class AnthropicProvider(LLMProvider):
         import anthropic
         from anthropic.types import TextBlock
 
+        actual_model = self.get_model(model)
+        user_message = f"Analyze this tweet:\n\n{tweet_text}"
+        max_tokens = 500
+
+        # Log request details
+        logger.debug(
+            "Anthropic API request\n"
+            f"  model: {actual_model}\n"
+            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
+            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  max_tokens: {max_tokens}"
+        )
+
         try:
             client = self._get_client()
             response = client.messages.create(
-                model=self.get_model(model),
-                max_tokens=500,  # Increased for thread classification
+                model=actual_model,
+                max_tokens=max_tokens,
                 system=system_prompt,
-                messages=[{"role": "user", "content": f"Analyze this tweet:\n\n{tweet_text}"}],
+                messages=[{"role": "user", "content": user_message}],
             )
 
             first_block = response.content[0]
             if not isinstance(first_block, TextBlock):
+                logger.warning("Anthropic API returned unexpected response type (no text content)")
                 return {"_error": "unexpected_response", "_message": "No text content"}
 
-            return self.parse_json_response(first_block.text)
+            # Log response
+            response_text = first_block.text
+            logger.debug(
+                f"Anthropic API response: ({len(response_text)} chars) "
+                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
+            )
+
+            return self.parse_json_response(response_text)
 
         except anthropic.APIError as e:
+            logger.warning(f"Anthropic API error: {e}")
             return {"_error": "api_error", "_message": str(e)[:200]}
 
     def classify_batch(
@@ -368,32 +394,56 @@ class AnthropicProvider(LLMProvider):
         import anthropic
         from anthropic.types import TextBlock
 
+        actual_model = self.get_model(model)
+        user_message = f"Classify these tweets:\n\n{tweets_text}"
+        max_tokens = 100 * len(expected_ids)
+
+        # Log request details
+        logger.debug(
+            "Anthropic API batch request\n"
+            f"  model: {actual_model}\n"
+            f"  batch_size: {len(expected_ids)}\n"
+            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
+            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  max_tokens: {max_tokens}"
+        )
+
         try:
             client = self._get_client()
             response = client.messages.create(
-                model=self.get_model(model),
-                max_tokens=100 * len(expected_ids),
+                model=actual_model,
+                max_tokens=max_tokens,
                 system=system_prompt,
                 messages=[
                     {
                         "role": "user",
-                        "content": f"Classify these tweets:\n\n{tweets_text}",
+                        "content": user_message,
                     }
                 ],
             )
 
             first_block = response.content[0]
             if not isinstance(first_block, TextBlock):
+                logger.warning("Anthropic API batch returned unexpected response type (no text content)")
                 return {
                     tid: {"_error": "unexpected_response", "_message": "No text content"}
                     for tid in expected_ids
                 }
 
-            return self.parse_batch_response(first_block.text, expected_ids)
+            # Log response
+            response_text = first_block.text
+            logger.debug(
+                f"Anthropic API batch response: ({len(response_text)} chars) "
+                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
+            )
+
+            return self.parse_batch_response(response_text, expected_ids)
 
         except anthropic.RateLimitError as e:
+            logger.warning(f"Anthropic API rate limit: {e}")
             return {tid: {"_error": "rate_limit", "_message": str(e)[:100]} for tid in expected_ids}
         except anthropic.APIError as e:
+            logger.warning(f"Anthropic API error: {e}")
             return {tid: {"_error": "api_error", "_message": str(e)[:200]} for tid in expected_ids}
 
 
@@ -453,23 +503,45 @@ class GeminiProvider(LLMProvider):
                 "_message": "google-genai package not installed",
             }
 
+        actual_model = self.get_model(model)
+        user_message = f"Analyze this tweet:\n\n{tweet_text}"
+        max_tokens = 500
+
+        # Log request details
+        logger.debug(
+            "Gemini API request\n"
+            f"  model: {actual_model}\n"
+            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
+            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  max_tokens: {max_tokens}"
+        )
+
         try:
             client = self._get_client()
             response = client.models.generate_content(
-                model=self.get_model(model),
-                contents=f"Analyze this tweet:\n\n{tweet_text}",
+                model=actual_model,
+                contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    max_output_tokens=500,  # Increased for thread classification
+                    max_output_tokens=max_tokens,
                 ),
             )
 
             if not response.text:
+                logger.warning("Gemini API returned unexpected response (no text content)")
                 return {"_error": "unexpected_response", "_message": "No text content"}
 
-            return self.parse_json_response(response.text)
+            # Log response
+            response_text = response.text
+            logger.debug(
+                f"Gemini API response: ({len(response_text)} chars) "
+                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
+            )
+
+            return self.parse_json_response(response_text)
 
         except genai.errors.APIError as e:
+            logger.warning(f"Gemini API error: {e}")
             return {"_error": "api_error", "_message": str(e)[:200]}
         except ImportError:
             return {
@@ -496,26 +568,49 @@ class GeminiProvider(LLMProvider):
                 for tid in expected_ids
             }
 
+        actual_model = self.get_model(model)
+        user_message = f"Classify these tweets:\n\n{tweets_text}"
+        max_tokens = 100 * len(expected_ids)
+
+        # Log request details
+        logger.debug(
+            "Gemini API batch request\n"
+            f"  model: {actual_model}\n"
+            f"  batch_size: {len(expected_ids)}\n"
+            f"  system_prompt: ({len(system_prompt)} chars) {system_prompt[:200]}{'...' if len(system_prompt) > 200 else ''}\n"
+            f"  user_message: ({len(user_message)} chars) {user_message[:500]}{'...' if len(user_message) > 500 else ''}\n"
+            f"  max_tokens: {max_tokens}"
+        )
+
         try:
             client = self._get_client()
             response = client.models.generate_content(
-                model=self.get_model(model),
-                contents=f"Classify these tweets:\n\n{tweets_text}",
+                model=actual_model,
+                contents=user_message,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    max_output_tokens=100 * len(expected_ids),
+                    max_output_tokens=max_tokens,
                 ),
             )
 
             if not response.text:
+                logger.warning("Gemini API batch returned unexpected response (no text content)")
                 return {
                     tid: {"_error": "unexpected_response", "_message": "No text content"}
                     for tid in expected_ids
                 }
 
-            return self.parse_batch_response(response.text, expected_ids)
+            # Log response
+            response_text = response.text
+            logger.debug(
+                f"Gemini API batch response: ({len(response_text)} chars) "
+                f"{response_text[:500]}{'...' if len(response_text) > 500 else ''}"
+            )
+
+            return self.parse_batch_response(response_text, expected_ids)
 
         except genai.errors.APIError as e:
+            logger.warning(f"Gemini API error: {e}")
             return {tid: {"_error": "api_error", "_message": str(e)[:200]} for tid in expected_ids}
 
 

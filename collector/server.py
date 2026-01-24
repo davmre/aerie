@@ -61,6 +61,7 @@ from database import (
     update_prompt,
 )
 from extractors import EXTRACTOR_SCHEMAS, list_extractor_schemas
+from logging_config import setup_logging
 from modes import (
     compute_mode_decisions,
     compute_mode_decisions_for_tweets,
@@ -223,6 +224,9 @@ def create_app(config=None):
             - TESTING: Set to True for test mode (disables worker)
             - CLASSIFICATION_ENABLED: Enable/disable classification worker
     """
+    # Initialize logging (idempotent - safe to call multiple times)
+    setup_logging()
+
     app = Flask(__name__)
 
     # Default configuration
