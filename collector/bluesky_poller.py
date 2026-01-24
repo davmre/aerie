@@ -34,6 +34,7 @@ from database import (
     store_retweets,
     store_tweets,
 )
+from logging_config import setup_logging
 
 # Platform identifier for Bluesky posts
 PLATFORM = "bluesky"
@@ -878,8 +879,16 @@ def main():
         action="store_true",
         help="Print detailed output",
     )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO, or AERIE_LOG_LEVEL env var)",
+    )
 
     args = parser.parse_args()
+
+    # Initialize logging
+    setup_logging(args.log_level)
 
     try:
         run_poller(
