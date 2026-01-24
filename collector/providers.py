@@ -156,22 +156,24 @@ class LLMProvider(ABC):
     @abstractmethod
     def classify_batch(
         self,
-        tweets_text: str,
-        expected_ids: list[str],
+        content_text: str,
+        expected_ids: list[str | int],
         system_prompt: str,
         model: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
+        id_field: str = "id",
+    ) -> dict[str | int, dict[str, Any]]:
         """
-        Classify multiple tweets in a single request.
+        Classify multiple items (tweets or chains) in a single request.
 
         Args:
-            tweets_text: Formatted batch of tweets to classify.
-            expected_ids: List of tweet IDs to expect in the response.
+            content_text: Formatted batch of content to classify.
+            expected_ids: List of IDs to expect in the response (tweet IDs or chain indices).
             system_prompt: The system prompt for batch classification.
             model: Model to use (defaults to provider's default_model).
+            id_field: Field name for IDs in the response ("id" for tweets, "chain" for chains).
 
         Returns:
-            Dict mapping tweet_id -> classification result.
+            Dict mapping id -> classification result.
         """
         pass
 
@@ -224,31 +226,52 @@ class LLMProvider(ABC):
     def parse_batch_response(
         self,
         content: str,
-        expected_ids: list[str],
-    ) -> dict[str, dict[str, Any]]:
+        expected_ids: list[str | int],
+        id_field: str = "id",
+    ) -> dict[str | int, dict[str, Any]]:
         """
-        Parse batch classification response into per-tweet results.
+        Parse batch classification response into per-item results.
 
-        The LLM returns indices (1, 2, 3...) which we map back to actual tweet IDs.
-        Returns a dict mapping tweet_id -> response dict.
+        For tweet batches (id_field="id"): LLM returns indices (1, 2, 3...) which
+        we map back to actual tweet IDs from expected_ids.
+
+        For chain batches (id_field="chain"): LLM returns chain indices (1, 2, 3...)
+        which we return directly as keys.
+
+        Args:
+            content: Raw LLM response text
+            expected_ids: List of expected IDs (tweet IDs for tweets, indices for chains)
+            id_field: Field name for IDs in the response ("id" or "chain")
+
+        Returns:
+            Dict mapping id -> response dict
         """
-        results: dict[str, dict[str, Any]] = {}
+        results: dict[str | int, dict[str, Any]] = {}
 
-        def index_to_tweet_id(index: int) -> str | None:
-            """Convert 1-based index to tweet ID, or None if invalid."""
+        # For chains, expected_ids are the indices themselves (1, 2, 3...)
+        # For tweets, expected_ids are tweet IDs and we map from indices
+        is_chain_mode = id_field == "chain"
+
+        def index_to_result_id(index: int) -> str | int | None:
+            """Convert LLM index to result key, or None if invalid."""
             if 1 <= index <= len(expected_ids):
-                return expected_ids[index - 1]
+                if is_chain_mode:
+                    # For chains, the index IS the result key
+                    return index
+                else:
+                    # For tweets, map index to tweet ID
+                    return expected_ids[index - 1]
             return None
 
         def extract_from_list(parsed: list) -> None:
             """Extract results from a parsed JSON list."""
             for item in parsed:
-                if isinstance(item, dict) and "id" in item:
+                if isinstance(item, dict) and id_field in item:
                     try:
-                        index = int(item["id"])
-                        tweet_id = index_to_tweet_id(index)
-                        if tweet_id:
-                            results[tweet_id] = {
+                        index = int(item[id_field])
+                        result_id = index_to_result_id(index)
+                        if result_id is not None:
+                            results[result_id] = {
                                 "approved": bool(item.get("approved", False)),
                                 "reason": str(item.get("reason", "")),
                             }
@@ -276,24 +299,26 @@ class LLMProvider(ABC):
 
         # If still no results, try to extract individual JSON objects
         if not results:
-            for obj_match in re.finditer(r'\{[^{}]*"id"\s*:\s*"?(\d+)"?[^{}]*\}', content):
+            # Build regex pattern dynamically based on id_field
+            pattern = rf'\{{[^{{}}]*"{id_field}"\s*:\s*"?(\d+)"?[^{{}}]*\}}'
+            for obj_match in re.finditer(pattern, content):
                 try:
                     obj = json.loads(obj_match.group())
-                    if "id" in obj:
-                        index = int(obj["id"])
-                        tweet_id = index_to_tweet_id(index)
-                        if tweet_id:
-                            results[tweet_id] = {
+                    if id_field in obj:
+                        index = int(obj[id_field])
+                        result_id = index_to_result_id(index)
+                        if result_id is not None:
+                            results[result_id] = {
                                 "approved": bool(obj.get("approved", False)),
                                 "reason": str(obj.get("reason", "")),
                             }
                 except (json.JSONDecodeError, ValueError, TypeError):
                     continue
 
-        # Mark any missing tweets as errors
-        for tweet_id in expected_ids:
-            if tweet_id not in results:
-                results[tweet_id] = {
+        # Mark any missing items as errors
+        for expected_id in expected_ids:
+            if expected_id not in results:
+                results[expected_id] = {
                     "_error": "parse_failed",
                     "_raw": content[:200] if not results else "missing from response",
                 }
@@ -385,16 +410,19 @@ class AnthropicProvider(LLMProvider):
 
     def classify_batch(
         self,
-        tweets_text: str,
-        expected_ids: list[str],
+        content_text: str,
+        expected_ids: list[str | int],
         system_prompt: str,
         model: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
+        id_field: str = "id",
+    ) -> dict[str | int, dict[str, Any]]:
         import anthropic
         from anthropic.types import TextBlock
 
         actual_model = self.get_model(model)
-        user_message = f"Classify these tweets:\n\n{tweets_text}"
+        # Use appropriate message based on content type
+        content_type = "chains" if id_field == "chain" else "tweets"
+        user_message = f"Classify these {content_type}:\n\n{content_text}"
         max_tokens = 100 * len(expected_ids)
 
         # Log request details
@@ -433,7 +461,7 @@ class AnthropicProvider(LLMProvider):
             response_text = first_block.text
             logger.debug(f"Anthropic API batch response: {truncate_for_log(response_text, 500)}")
 
-            return self.parse_batch_response(response_text, expected_ids)
+            return self.parse_batch_response(response_text, expected_ids, id_field)
 
         except anthropic.RateLimitError as e:
             logger.warning(f"Anthropic API rate limit: {e}")
@@ -544,11 +572,12 @@ class GeminiProvider(LLMProvider):
 
     def classify_batch(
         self,
-        tweets_text: str,
-        expected_ids: list[str],
+        content_text: str,
+        expected_ids: list[str | int],
         system_prompt: str,
         model: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
+        id_field: str = "id",
+    ) -> dict[str | int, dict[str, Any]]:
         try:
             from google import genai  # type: ignore[import-not-found]
             from google.genai import types  # type: ignore[import-not-found]
@@ -562,7 +591,9 @@ class GeminiProvider(LLMProvider):
             }
 
         actual_model = self.get_model(model)
-        user_message = f"Classify these tweets:\n\n{tweets_text}"
+        # Use appropriate message based on content type
+        content_type = "chains" if id_field == "chain" else "tweets"
+        user_message = f"Classify these {content_type}:\n\n{content_text}"
         max_tokens = 100 * len(expected_ids)
 
         # Log request details
@@ -597,7 +628,7 @@ class GeminiProvider(LLMProvider):
             response_text = response.text
             logger.debug(f"Gemini API batch response: {truncate_for_log(response_text, 500)}")
 
-            return self.parse_batch_response(response_text, expected_ids)
+            return self.parse_batch_response(response_text, expected_ids, id_field)
 
         except genai.errors.APIError as e:
             logger.warning(f"Gemini API error: {e}")

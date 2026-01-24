@@ -13,12 +13,13 @@ from pathlib import Path
 
 from flask import Flask, current_app, jsonify, redirect, render_template, request
 
-from batch_classifier import classify_and_store_batch
+from batch_classifier import classify_chains_and_store_batch
 from classification_queue import Priority, get_classification_queue
 from classifier import format_chain_for_classification, setup_prompts_and_modes
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
+    assemble_classification_chains,
     compute_single_chain,
     count_conversation_roots_after_cursor,
     count_modes_using_prompt,
@@ -172,13 +173,28 @@ def start_classification_worker(db_path: Path, config: dict):
                             if not tweets_list:
                                 continue
 
-                            # Classify the batch
+                            # Get actual model name for chain assembly
+                            from providers import get_default_provider, get_provider
+
+                            provider_name = mode_provider or get_default_provider()
+                            provider = get_provider(provider_name)
+                            actual_model = provider.get_model(mode_model)
+
+                            # Assemble into chains with thread context
+                            chains = assemble_classification_chains(
+                                tweets_list, prompt_id, actual_model, db_path
+                            )
+
+                            if not chains:
+                                continue
+
+                            # Classify the chains
                             model_info = f" ({mode_model})" if mode_model else ""
                             print(
-                                f"[Worker] Classifying {len(tweets_list)} tweets for {mode_id}{model_info}"
+                                f"[Worker] Classifying {len(chains)} chains ({len(tweets_list)} tweets) for {mode_id}{model_info}"
                             )
-                            results = classify_and_store_batch(
-                                tweets_list,
+                            results = classify_chains_and_store_batch(
+                                chains,
                                 prompt_id,
                                 provider_name=mode_provider,
                                 model=mode_model,
