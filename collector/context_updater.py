@@ -37,16 +37,16 @@ from providers import get_default_provider, get_provider
 # Context Update Prompt
 # =============================================================================
 
-CONTEXT_UPDATE_PROMPT = """You are maintaining a situational context document for a tweet classifier.
+CONTEXT_UPDATE_PROMPT = """You are maintaining situational context for a tweet classifier.
 Your job is to summarize what's currently being discussed on the timeline.
 
-CURRENT CONTEXT (may be empty if first run):
+PREVIOUS CONTEXT (may be empty if first run):
 {current_context}
 
 RECENT POSTS (last 24-48 hours):
 {recent_posts}
 
-Update the context document. Guidelines:
+Please update the context summary. Guidelines:
 - Keep it under {token_limit} tokens (roughly {char_limit} characters)
 - Focus on topics/events that help interpret ambiguous posts
 - Include ongoing discussions, current events, recurring themes
