@@ -38,7 +38,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["database", "modes", "extractors", "prefilters", "types", "utils"]
+known-first-party = ["database", "modes", "extractors", "prefilters", "datatypes", "utils"]
 
 [tool.ruff.format]
 quote-style = "double"
