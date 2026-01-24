@@ -964,7 +964,7 @@ def create_app(config=None):
         except UnauthorizedError:
             return jsonify({"error": "Authentication failed. Check your credentials."}), 401
         except Exception as e:
-            return jsonify({"error": f"Connection failed: {str(e)}"}), 500
+            return jsonify({"error": f"Connection failed: {e!s}"}), 500
 
     @app.route("/api/settings/bluesky", methods=["DELETE"])
     def api_delete_bluesky_settings():
@@ -1080,7 +1080,7 @@ def create_app(config=None):
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
-            return jsonify({"error": f"Test failed: {str(e)}"}), 500
+            return jsonify({"error": f"Test failed: {e!s}"}), 500
 
     # =========================================================================
     # Web UI Routes
@@ -1351,7 +1351,7 @@ def create_app(config=None):
 
             # Add the exact text as rendered for the LLM classifier
             # Build the full conversation chain (ancestors + this tweet) for thread-level classification
-            chain = tweet.get("thread_ancestors", []) + [tweet]
+            chain = [*tweet.get("thread_ancestors", []), tweet]
             tweet["llm_input"] = format_chain_for_classification(chain)
 
         return jsonify({"tweets": tweets, "total": total})
