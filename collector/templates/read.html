@@ -377,6 +377,11 @@
         <option value="created_at">Tweet date</option>
         <option value="captured_at">Captured date</option>
     </select>
+
+    <button class="btn" id="collect-twitter-btn" onclick="collectTwitter()" style="margin-left: auto;">
+        Collect Tweets
+    </button>
+    <span id="collect-status" style="font-size: 0.85rem; color: var(--text-secondary);"></span>
 </div>
 
 <div class="mode-stats" id="mode-stats"></div>
@@ -937,5 +942,78 @@ sortSelect.addEventListener('change', () => {
 loadChains();
 updateStats(modeSelect.value);
 triggerClassification();
+
+// =========================================================================
+// Twitter Headless Collection
+// =========================================================================
+
+let collectPollInterval = null;
+
+async function collectTwitter() {
+    const btn = document.getElementById('collect-twitter-btn');
+    const status = document.getElementById('collect-status');
+
+    btn.disabled = true;
+    status.innerHTML = '<span class="spinner-small"></span> Collecting...';
+
+    try {
+        const resp = await fetch('/api/twitter/collect', { method: 'POST' });
+        const data = await resp.json();
+
+        if (data.error) {
+            status.textContent = 'Error: ' + data.error;
+            btn.disabled = false;
+            return;
+        }
+
+        if (data.status === 'already_running') {
+            status.textContent = 'Collection already running...';
+        } else {
+            status.innerHTML = `<span class="spinner-small"></span> Collecting (${data.duration}s)...`;
+        }
+
+        // Poll for completion
+        pollCollectionStatus();
+    } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        btn.disabled = false;
+    }
+}
+
+function pollCollectionStatus() {
+    if (collectPollInterval) {
+        clearInterval(collectPollInterval);
+    }
+
+    collectPollInterval = setInterval(async () => {
+        try {
+            const resp = await fetch('/api/twitter/collect/status');
+            const data = await resp.json();
+
+            if (!data.running) {
+                clearInterval(collectPollInterval);
+                collectPollInterval = null;
+
+                const status = document.getElementById('collect-status');
+                const btn = document.getElementById('collect-twitter-btn');
+
+                if (data.error) {
+                    status.textContent = 'Error: ' + data.error;
+                } else {
+                    status.textContent = `Done (${data.tweets_captured} tweets)`;
+                    // Refresh feed after a brief delay
+                    setTimeout(() => {
+                        status.textContent = '';
+                        loadNewPostsAbove();
+                        updateStats(modeSelect.value);
+                    }, 2000);
+                }
+                btn.disabled = false;
+            }
+        } catch (err) {
+            console.error('Error polling collection status:', err);
+        }
+    }, 2000);
+}
 </script>
 {% endblock %}

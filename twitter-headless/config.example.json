@@ -1,0 +1,10 @@
+{
+    "collector_url": "http://localhost:8080",
+    "cookies_file": "cookies.json",
+    "scroll_duration": 60,
+    "server_port": 8081,
+    "auth": {
+        "username": "",
+        "password": ""
+    }
+}

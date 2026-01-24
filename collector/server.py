@@ -981,6 +981,99 @@ def create_app(config=None):
         return jsonify({"status": "ok"})
 
     # =========================================================================
+    # Twitter Headless Collector Settings
+    # =========================================================================
+
+    @app.route("/api/settings/twitter-collector", methods=["GET"])
+    def api_get_twitter_collector_settings():
+        """Get Twitter headless collector settings."""
+        db_path = get_db_path()
+        url = get_setting("twitter_collector_url", db_path)
+        return jsonify({"url": url or ""})
+
+    @app.route("/api/settings/twitter-collector", methods=["POST"])
+    def api_save_twitter_collector_settings():
+        """Save Twitter headless collector settings."""
+        db_path = get_db_path()
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Missing JSON body"}), 400
+
+        url = data.get("url", "").strip()
+        if url:
+            set_setting("twitter_collector_url", url, db_path)
+        else:
+            delete_setting("twitter_collector_url", db_path)
+
+        return jsonify({"status": "ok"})
+
+    @app.route("/api/settings/twitter-collector/test", methods=["POST"])
+    def api_test_twitter_collector():
+        """Test connection to Twitter headless collector."""
+        import httpx
+
+        db_path = get_db_path()
+        data = request.get_json() or {}
+
+        # Use provided URL or fall back to saved one
+        url = data.get("url", "").strip()
+        if not url:
+            url = get_setting("twitter_collector_url", db_path) or ""
+
+        if not url:
+            return jsonify({"error": "No collector URL provided or saved"}), 400
+
+        try:
+            resp = httpx.get(f"{url}/health", timeout=5.0)
+            if resp.status_code == 200:
+                return jsonify({"success": True, "url": url})
+            else:
+                return jsonify({"error": f"Health check returned {resp.status_code}"}), 400
+        except httpx.RequestError as e:
+            return jsonify({"error": f"Cannot reach collector: {e}"}), 400
+
+    @app.route("/api/twitter/collect", methods=["POST", "OPTIONS"])
+    def api_twitter_collect():
+        """Proxy collection request to headless collector."""
+        import httpx
+
+        if request.method == "OPTIONS":
+            return "", 204
+
+        db_path = get_db_path()
+        collector_url = get_setting("twitter_collector_url", db_path)
+
+        if not collector_url:
+            return jsonify({"error": "Headless collector URL not configured"}), 400
+
+        try:
+            resp = httpx.post(
+                f"{collector_url}/collect",
+                json=request.get_json() or {},
+                timeout=10.0,
+            )
+            return jsonify(resp.json()), resp.status_code
+        except httpx.RequestError as e:
+            return jsonify({"error": f"Cannot reach collector: {e}"}), 502
+
+    @app.route("/api/twitter/collect/status", methods=["GET"])
+    def api_twitter_collect_status():
+        """Proxy status request to headless collector."""
+        import httpx
+
+        db_path = get_db_path()
+        collector_url = get_setting("twitter_collector_url", db_path)
+
+        if not collector_url:
+            return jsonify({"error": "Not configured", "running": False}), 400
+
+        try:
+            resp = httpx.get(f"{collector_url}/status", timeout=5.0)
+            return jsonify(resp.json())
+        except httpx.RequestError as e:
+            return jsonify({"error": str(e), "running": False})
+
+    # =========================================================================
     # LLM API Key Settings
     # =========================================================================
 

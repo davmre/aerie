@@ -1,0 +1,36 @@
+[project]
+name = "aerie-twitter-headless"
+version = "0.1.0"
+description = "Headless Twitter collector for Aerie using Camoufox"
+requires-python = ">=3.11"
+dependencies = [
+    "camoufox[geoip]>=0.4",
+    "httpx>=0.25",
+    "flask>=3.0",
+]
+
+[project.scripts]
+aerie-twitter-server = "server:main"
+aerie-twitter-collect = "collector:main"
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "basic"
+include = ["*.py"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]

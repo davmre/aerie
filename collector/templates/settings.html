@@ -251,6 +251,33 @@
         </div>
     </div>
 
+    <!-- Twitter Headless Collection -->
+    <div class="settings-section">
+        <h2>
+            <span class="platform-icon">🐦</span>
+            Twitter Collection (Headless)
+        </h2>
+        <div style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 16px;">
+            Configure the headless Twitter collector service for automated tweet collection.
+        </div>
+
+        <div class="form-group">
+            <label for="twitter-collector-url">Headless Collector URL</label>
+            <input type="text" id="twitter-collector-url" placeholder="http://localhost:8081">
+            <div class="help-text">
+                URL of the headless Twitter collector service (twitter-headless package)
+            </div>
+        </div>
+
+        <div class="button-row">
+            <button type="button" class="btn btn-primary" onclick="saveTwitterCollector()">Save</button>
+            <button type="button" class="btn btn-test" onclick="testTwitterCollector()">Test Connection</button>
+            <button type="button" class="btn" onclick="clearTwitterCollector()" style="margin-left: auto;">Clear</button>
+        </div>
+
+        <div id="twitter-collector-status" class="connection-status hidden"></div>
+    </div>
+
     <!-- LLM API Keys -->
     <div class="settings-section">
         <h2>
@@ -557,5 +584,99 @@ function toggleLLMPassword(inputId) {
 
 // Load LLM settings on page load
 loadLLMSettings();
+
+// =============================================================================
+// Twitter Headless Collector Settings
+// =============================================================================
+
+const twitterCollectorUrlInput = document.getElementById('twitter-collector-url');
+const twitterCollectorStatusDiv = document.getElementById('twitter-collector-status');
+
+async function loadTwitterCollectorSettings() {
+    try {
+        const response = await fetch('/api/settings/twitter-collector');
+        const data = await response.json();
+        if (data.url) {
+            twitterCollectorUrlInput.value = data.url;
+        }
+    } catch (err) {
+        console.error('Failed to load Twitter collector settings:', err);
+    }
+}
+
+async function saveTwitterCollector() {
+    const url = twitterCollectorUrlInput.value.trim();
+
+    try {
+        const response = await fetch('/api/settings/twitter-collector', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+
+        if (response.ok) {
+            showTwitterCollectorStatus('Settings saved', 'success');
+        } else {
+            const data = await response.json();
+            showTwitterCollectorStatus(data.error || 'Failed to save', 'error');
+        }
+    } catch (err) {
+        showTwitterCollectorStatus('Failed to save: ' + err.message, 'error');
+    }
+}
+
+async function testTwitterCollector() {
+    const url = twitterCollectorUrlInput.value.trim();
+
+    if (!url) {
+        showTwitterCollectorStatus('Enter a URL first', 'error');
+        return;
+    }
+
+    showTwitterCollectorStatus('Testing connection...', 'pending');
+
+    try {
+        const response = await fetch('/api/settings/twitter-collector/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            showTwitterCollectorStatus('Connected successfully', 'success');
+        } else {
+            showTwitterCollectorStatus(data.error || 'Connection failed', 'error');
+        }
+    } catch (err) {
+        showTwitterCollectorStatus('Connection test failed: ' + err.message, 'error');
+    }
+}
+
+async function clearTwitterCollector() {
+    try {
+        const response = await fetch('/api/settings/twitter-collector', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: '' })
+        });
+
+        if (response.ok) {
+            twitterCollectorUrlInput.value = '';
+            showTwitterCollectorStatus('Settings cleared', 'success');
+        }
+    } catch (err) {
+        showTwitterCollectorStatus('Failed to clear: ' + err.message, 'error');
+    }
+}
+
+function showTwitterCollectorStatus(message, type) {
+    twitterCollectorStatusDiv.textContent = message;
+    twitterCollectorStatusDiv.className = 'connection-status ' + type;
+}
+
+// Load Twitter collector settings on page load
+loadTwitterCollectorSettings();
 </script>
 {% endblock %}
