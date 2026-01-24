@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, current_app, jsonify, render_template, request
+from flask import Flask, current_app, jsonify, redirect, render_template, request
 
 from batch_classifier import classify_and_store_batch
 from classification_queue import Priority, get_classification_queue
@@ -1085,6 +1085,11 @@ def create_app(config=None):
     # =========================================================================
     # Web UI Routes
     # =========================================================================
+
+    @app.route("/")
+    def index():
+        """Redirect root to the Read UI."""
+        return redirect("/ui/read")
 
     @app.route("/ui/label")
     def ui_label():

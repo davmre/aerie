@@ -357,6 +357,98 @@
             font-size: 2rem;
         }
 
+        /* Image modal for fullsize viewing */
+        .image-modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            visibility: hidden;
+            opacity: 0;
+            transition: opacity 0.2s, visibility 0.2s;
+            cursor: zoom-out;
+        }
+
+        .image-modal-overlay.active {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .image-modal-content {
+            max-width: 95vw;
+            max-height: 95vh;
+            object-fit: contain;
+        }
+
+        .image-modal-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            padding: 20px 15px;
+            font-size: 24px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .image-modal-nav:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .image-modal-nav.prev {
+            left: 20px;
+        }
+
+        .image-modal-nav.next {
+            right: 20px;
+        }
+
+        .image-modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: none;
+            width: 40px;
+            height: 40px;
+            font-size: 24px;
+            cursor: pointer;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .image-modal-close:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .image-modal-counter {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px 12px;
+            border-radius: 15px;
+        }
+
+        .media-item img {
+            cursor: zoom-in;
+        }
+
         /* Link preview card */
         .link-preview-card {
             display: flex;
@@ -769,8 +861,8 @@
         <header>
             <h1>Aerie</h1>
             <nav>
-                <a href="/ui/label" class="{% if active_page == 'label' %}active{% endif %}">Label</a>
                 <a href="/ui/read" class="{% if active_page == 'read' %}active{% endif %}">Read</a>
+                <a href="/ui/label" class="{% if active_page == 'label' %}active{% endif %}">Label</a>
                 <a href="/ui/modes" class="{% if active_page == 'modes' %}active{% endif %}">Modes</a>
                 <a href="/ui/prompts" class="{% if active_page == 'prompts' %}active{% endif %}">Prompts</a>
                 <a href="/ui/settings" class="{% if active_page == 'settings' %}active{% endif %}">Settings</a>
@@ -785,6 +877,15 @@
         <span class="theme-toggle-icon" id="theme-icon"></span>
         <span id="theme-label"></span>
     </button>
+
+    <!-- Image modal for fullsize viewing -->
+    <div class="image-modal-overlay" id="image-modal" onclick="closeImageModal(event)">
+        <button class="image-modal-close" onclick="closeImageModal(event)">&times;</button>
+        <button class="image-modal-nav prev" onclick="prevImage(event)" id="image-modal-prev">&lt;</button>
+        <img class="image-modal-content" id="image-modal-img" src="" alt="Full size image">
+        <button class="image-modal-nav next" onclick="nextImage(event)" id="image-modal-next">&gt;</button>
+        <div class="image-modal-counter" id="image-modal-counter"></div>
+    </div>
 
     <script>
         // Stats management - can be called by child templates
@@ -810,7 +911,9 @@
             if (!dateStr) return '';
             try {
                 const date = new Date(dateStr);
-                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const datePart = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                const timePart = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                return `${datePart} ${timePart}`;
             } catch {
                 return '';
             }
@@ -1140,17 +1243,22 @@
                               media.length === 2 ? 'double' :
                               media.length === 3 ? 'triple' : 'quad';
 
+            // Collect all photo URLs for the modal gallery
+            const photos = media.filter(m => m.type === 'photo').map(m => m.url);
+            const photosData = encodeURIComponent(JSON.stringify(photos));
+
+            let photoIndex = 0;
             const items = media.slice(0, 4).map(m => {
                 if (m.type === 'photo') {
+                    const idx = photoIndex++;
                     return `
                         <div class="media-item">
-                            <a href="${escapeHtml(m.expanded_url || m.url)}" target="_blank" rel="noopener">
-                                <img src="${escapeHtml(m.url)}" alt="Image" loading="lazy">
-                            </a>
+                            <img src="${escapeHtml(m.url)}" alt="Image" loading="lazy"
+                                 onclick="openImageModal('${photosData}', ${idx})">
                         </div>
                     `;
                 } else if (m.type === 'video' || m.type === 'animated_gif') {
-                    // Video or animated_gif - show thumbnail with play overlay
+                    // Video or animated_gif - show thumbnail with play overlay, link to original
                     return `
                         <div class="media-item">
                             <a href="${escapeHtml(m.expanded_url)}" target="_blank" rel="noopener">
@@ -1165,6 +1273,83 @@
 
             container.innerHTML = `<div class="media-grid ${gridClass}">${items}</div>`;
         }
+
+        // =================================================================
+        // Image modal for fullsize viewing
+        // =================================================================
+
+        let currentImageGallery = [];
+        let currentImageIndex = 0;
+
+        function openImageModal(encodedPhotos, index) {
+            event.stopPropagation();
+            try {
+                currentImageGallery = JSON.parse(decodeURIComponent(encodedPhotos));
+                currentImageIndex = index;
+                updateImageModal();
+                document.getElementById('image-modal').classList.add('active');
+                document.body.style.overflow = 'hidden';
+            } catch (e) {
+                console.error('Failed to open image modal:', e);
+            }
+        }
+
+        function updateImageModal() {
+            const img = document.getElementById('image-modal-img');
+            const counter = document.getElementById('image-modal-counter');
+            const prevBtn = document.getElementById('image-modal-prev');
+            const nextBtn = document.getElementById('image-modal-next');
+
+            img.src = currentImageGallery[currentImageIndex];
+
+            // Show counter only if multiple images
+            if (currentImageGallery.length > 1) {
+                counter.textContent = `${currentImageIndex + 1} / ${currentImageGallery.length}`;
+                counter.style.display = 'block';
+                prevBtn.style.display = 'block';
+                nextBtn.style.display = 'block';
+            } else {
+                counter.style.display = 'none';
+                prevBtn.style.display = 'none';
+                nextBtn.style.display = 'none';
+            }
+        }
+
+        function closeImageModal(event) {
+            if (event) event.stopPropagation();
+            document.getElementById('image-modal').classList.remove('active');
+            document.body.style.overflow = '';
+        }
+
+        function prevImage(event) {
+            event.stopPropagation();
+            if (currentImageGallery.length > 1) {
+                currentImageIndex = (currentImageIndex - 1 + currentImageGallery.length) % currentImageGallery.length;
+                updateImageModal();
+            }
+        }
+
+        function nextImage(event) {
+            event.stopPropagation();
+            if (currentImageGallery.length > 1) {
+                currentImageIndex = (currentImageIndex + 1) % currentImageGallery.length;
+                updateImageModal();
+            }
+        }
+
+        // Keyboard navigation for image modal
+        document.addEventListener('keydown', function(e) {
+            const modal = document.getElementById('image-modal');
+            if (!modal.classList.contains('active')) return;
+
+            if (e.key === 'Escape') {
+                closeImageModal();
+            } else if (e.key === 'ArrowLeft') {
+                prevImage(e);
+            } else if (e.key === 'ArrowRight') {
+                nextImage(e);
+            }
+        });
 
         // =================================================================
         // Theme management
