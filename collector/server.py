@@ -15,6 +15,7 @@ from flask import Flask, current_app, jsonify, redirect, render_template, reques
 from batch_classifier import classify_chains_and_store_batch
 from classification_queue import Priority, get_classification_queue
 from classifier import format_chain_for_classification, setup_prompts_and_modes
+from config import ClassificationConfig
 from database import (
     DEFAULT_DB_PATH,
     add_human_label,
@@ -85,12 +86,12 @@ def get_db_path() -> Path:
 # =============================================================================
 
 DEFAULT_CLASSIFICATION_CONFIG = {
-    "enabled": True,
-    "batch_size": 10,
-    "batch_timeout": 0.2,  # seconds to wait for batch to fill
-    "provider": "anthropic",  # LLM provider (anthropic, gemini)
-    "model": None,  # Model to use (None = provider's default)
-    "default_prompt_id": "binary_filter_v1",
+    "enabled": ClassificationConfig.ENABLED,
+    "batch_size": ClassificationConfig.BATCH_SIZE,
+    "batch_timeout": ClassificationConfig.BATCH_TIMEOUT,
+    "provider": ClassificationConfig.DEFAULT_PROVIDER,
+    "model": ClassificationConfig.DEFAULT_MODEL,
+    "default_prompt_id": ClassificationConfig.DEFAULT_PROMPT_ID,
 }
 
 _worker_thread: threading.Thread | None = None

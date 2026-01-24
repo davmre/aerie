@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from config import ClassificationConfig, LLMConfig
 from logging_config import truncate_for_log
 
 # Get logger for provider operations
@@ -341,12 +342,8 @@ class AnthropicProvider(LLMProvider):
     config = ProviderConfig(
         name="anthropic",
         description="Anthropic Claude models (Haiku, Sonnet, Opus)",
-        default_model="claude-sonnet-4-5",
-        available_models=[
-            "claude-haiku-4-5",
-            "claude-sonnet-4-5",
-            "claude-opus-4-5",
-        ],
+        default_model=LLMConfig.ANTHROPIC_DEFAULT_MODEL,
+        available_models=LLMConfig.ANTHROPIC_MODELS,
         api_key_env_var="ANTHROPIC_API_KEY",
     )
 
@@ -377,7 +374,7 @@ class AnthropicProvider(LLMProvider):
 
         actual_model = self.get_model(model)
         user_message = f"Analyze this tweet:\n\n{tweet_text}"
-        max_tokens = 500
+        max_tokens = LLMConfig.SINGLE_REQUEST_MAX_TOKENS
 
         # Log request details
         logger.debug(
@@ -427,7 +424,7 @@ class AnthropicProvider(LLMProvider):
         # Use appropriate message based on content type
         content_type = "chains" if id_field == "chain" else "tweets"
         user_message = f"Classify these {content_type}:\n\n{content_text}"
-        max_tokens = 100 * len(expected_ids)
+        max_tokens = LLMConfig.BATCH_TOKENS_PER_ITEM * len(expected_ids)
 
         # Log request details
         logger.debug(
@@ -486,12 +483,8 @@ class GeminiProvider(LLMProvider):
     config = ProviderConfig(
         name="gemini",
         description="Google Gemini models (Flash, Pro)",
-        default_model="gemini-3-flash-preview",
-        available_models=[
-            "gemini-3-flash-preview",
-            "gemini-2.5-flash",
-            "gemini-2.5-flash-lite",
-        ],
+        default_model=LLMConfig.GEMINI_DEFAULT_MODEL,
+        available_models=LLMConfig.GEMINI_MODELS,
         api_key_env_var="GEMINI_API_KEY",
     )
 
@@ -533,7 +526,7 @@ class GeminiProvider(LLMProvider):
 
         actual_model = self.get_model(model)
         user_message = f"Analyze this tweet:\n\n{tweet_text}"
-        max_tokens = 500
+        max_tokens = LLMConfig.SINGLE_REQUEST_MAX_TOKENS
 
         # Log request details
         logger.debug(
@@ -598,7 +591,7 @@ class GeminiProvider(LLMProvider):
         # Use appropriate message based on content type
         content_type = "chains" if id_field == "chain" else "tweets"
         user_message = f"Classify these {content_type}:\n\n{content_text}"
-        max_tokens = 100 * len(expected_ids)
+        max_tokens = LLMConfig.BATCH_TOKENS_PER_ITEM * len(expected_ids)
 
         # Log request details
         logger.debug(
@@ -710,4 +703,4 @@ def list_providers(db_path: Path | None = None) -> list[dict[str, Any]]:
 
 def get_default_provider() -> str:
     """Get the default provider name."""
-    return "anthropic"
+    return ClassificationConfig.DEFAULT_PROVIDER

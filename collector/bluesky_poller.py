@@ -17,7 +17,6 @@ Usage:
 """
 
 import argparse
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,10 +25,10 @@ from typing import Any
 from atproto import Client
 from atproto_client.exceptions import RequestException, UnauthorizedError
 
+from config import PollingConfig, get_bluesky_credentials
 from database import (
     DEFAULT_DB_PATH,
     get_bluesky_post_ids,
-    get_setting,
     init_database,
     store_retweets,
     store_tweets,
@@ -46,15 +45,7 @@ def get_credentials(db_path: Path = DEFAULT_DB_PATH) -> tuple[str, str]:
 
     Priority: Environment variables > Database settings
     """
-    # Try environment variables first
-    handle = os.environ.get("BLUESKY_HANDLE")
-    app_password = os.environ.get("BLUESKY_APP_PASSWORD")
-
-    # Fall back to database settings
-    if not handle:
-        handle = get_setting("bluesky_handle", db_path)
-    if not app_password:
-        app_password = get_setting("bluesky_password", db_path)
+    handle, app_password = get_bluesky_credentials(db_path)
 
     if not handle or not app_password:
         raise ValueError(
@@ -796,8 +787,8 @@ def poll_and_store(
 def run_poller(
     db_path: Path = DEFAULT_DB_PATH,
     watch: bool = False,
-    interval: int = 120,
-    limit: int = 50,
+    interval: int = PollingConfig.BLUESKY_INTERVAL,
+    limit: int = PollingConfig.BLUESKY_FETCH_LIMIT,
     verbose: bool = False,
 ):
     """
