@@ -1169,7 +1169,8 @@ def create_app(config=None):
             "provider": "anthropic",
             "model": null,
             "hours": 48,
-            "token_limit": 2000
+            "token_limit": 2000,
+            "max_input_tokens": 50000
         }
         """
         db_path = get_db_path()
@@ -1182,6 +1183,7 @@ def create_app(config=None):
             model=data.get("model"),
             hours=data.get("hours", 48),
             token_limit=data.get("token_limit", 2000),
+            max_input_tokens=data.get("max_input_tokens", 50000),
             db_path=db_path,
             verbose=False,
         )
@@ -1205,7 +1207,8 @@ def create_app(config=None):
         Request body (all optional):
         {
             "hours": 48,
-            "token_limit": 2000
+            "token_limit": 2000,
+            "max_input_tokens": 50000
         }
 
         Returns the full prompt text without calling the LLM.
@@ -1218,6 +1221,7 @@ def create_app(config=None):
         result = build_context_prompt(
             hours=data.get("hours", 48),
             token_limit=data.get("token_limit", 2000),
+            max_input_tokens=data.get("max_input_tokens", 50000),
             db_path=db_path,
         )
 

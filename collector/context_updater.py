@@ -67,6 +67,7 @@ Return ONLY the updated context text, nothing else."""
 def build_context_prompt(
     hours: int = 48,
     token_limit: int = 2000,
+    max_input_tokens: int = 50000,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict:
     """
@@ -76,7 +77,8 @@ def build_context_prompt(
 
     Args:
         hours: Hours of recent posts to include
-        token_limit: Target token limit for the context
+        token_limit: Target token limit for the OUTPUT context
+        max_input_tokens: Max tokens of tweet content to include in INPUT
         db_path: Database path
 
     Returns:
@@ -84,6 +86,7 @@ def build_context_prompt(
         - prompt: The full formatted prompt
         - current_context: The current context text (or placeholder)
         - tweet_count: Number of tweets included
+        - thread_count: Number of conversation threads included
         - char_count: Total characters in the prompt
     """
     init_database(db_path)
@@ -92,11 +95,14 @@ def build_context_prompt(
     current_context = get_current_context(db_path)
     current_text = current_context["text"] if current_context else "(No previous context)"
 
-    # Get recent tweets
-    tweets = get_recent_tweets_for_context(hours=hours, limit=500, db_path=db_path)
+    # Get recent tweets - fetch a large number, we'll limit by chars below
+    # Estimate: 50 chars per tweet avg, so fetch 4x what we need
+    max_tweets = max(1000, max_input_tokens // 10)
+    tweets = get_recent_tweets_for_context(hours=hours, limit=max_tweets, db_path=db_path)
 
-    # Format tweets for the prompt
-    tweets_text = format_tweets_for_context(tweets)
+    # Format tweets for the prompt (limit by max_input_tokens)
+    max_input_chars = max_input_tokens * 4
+    tweets_text, thread_count = format_tweets_for_context(tweets, max_chars=max_input_chars)
     char_limit = token_limit * 4
 
     # Build the prompt
@@ -111,6 +117,7 @@ def build_context_prompt(
         "prompt": prompt,
         "current_context": current_text,
         "tweet_count": len(tweets),
+        "thread_count": thread_count,
         "char_count": len(prompt),
         "token_estimate": len(prompt) // 4,
     }
@@ -190,7 +197,7 @@ def group_tweets_into_threads(tweets: list[dict]) -> list[list[dict]]:
     return threads
 
 
-def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str:
+def format_tweets_for_context(tweets: list[dict], max_chars: int = 200000) -> tuple[str, int]:
     """
     Format tweets for inclusion in the context update prompt.
 
@@ -202,16 +209,16 @@ def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str
         max_chars: Maximum characters to include
 
     Returns:
-        Formatted string of tweets grouped by threads
+        Tuple of (formatted string, number of threads included)
     """
     if not tweets:
-        return "(No recent posts)"
+        return "(No recent posts)", 0
 
     # Group into threads
     threads = group_tweets_into_threads(tweets)
 
     if not threads:
-        return "(No recent posts)"
+        return "(No recent posts)", 0
 
     # Format each thread
     parts = []
@@ -237,11 +244,12 @@ def format_tweets_for_context(tweets: list[dict], max_chars: int = 20000) -> str
     result = "".join(parts)
 
     # Add summary header
-    standalone = sum(1 for t in threads if len(t) == 1)
-    multi = len(threads) - standalone
-    header = f"({thread_count} conversation{'s' if thread_count != 1 else ''}: {standalone} standalone posts, {multi} threads)\n\n"
+    standalone = sum(1 for t in threads[:thread_count] if len(t) == 1)
+    multi = thread_count - standalone
+    s = "s" if thread_count != 1 else ""
+    header = f"({thread_count} conversation{s}: {standalone} standalone, {multi} threads)\n\n"
 
-    return header + result
+    return header + result, thread_count
 
 
 def estimate_tokens(text: str) -> int:
@@ -257,6 +265,7 @@ def update_context(
     model: str | None = None,
     hours: int = 48,
     token_limit: int = 2000,
+    max_input_tokens: int = 50000,
     db_path: Path = DEFAULT_DB_PATH,
     verbose: bool = False,
 ) -> dict:
@@ -270,7 +279,8 @@ def update_context(
         provider_name: LLM provider to use (default: anthropic)
         model: Model to use (default: provider's default)
         hours: Hours of recent posts to include
-        token_limit: Target token limit for the context
+        token_limit: Target token limit for the OUTPUT context
+        max_input_tokens: Max tokens of tweet content to include in INPUT
         db_path: Database path
         verbose: Print detailed output
 
@@ -307,17 +317,22 @@ def update_context(
         print(f"Previous context: {previous_context_id or 'none'}")
         print(f"Provider: {provider_name}, Model: {actual_model}")
 
-    # Get recent tweets
-    tweets = get_recent_tweets_for_context(hours=hours, limit=500, db_path=db_path)
+    # Get recent tweets - fetch a large number, we'll limit by chars below
+    max_tweets = max(1000, max_input_tokens // 10)
+    tweets = get_recent_tweets_for_context(hours=hours, limit=max_tweets, db_path=db_path)
     if verbose:
         print(f"Found {len(tweets)} tweets from last {hours} hours")
 
     if not tweets:
         return {"error": "No recent tweets found"}
 
-    # Format tweets for the prompt
-    tweets_text = format_tweets_for_context(tweets)
+    # Format tweets for the prompt (limit by max_input_tokens)
+    max_input_chars = max_input_tokens * 4
+    tweets_text, thread_count = format_tweets_for_context(tweets, max_chars=max_input_chars)
     char_limit = token_limit * 4
+
+    if verbose:
+        print(f"Including {thread_count} conversation threads")
 
     # Build the prompt
     prompt = CONTEXT_UPDATE_PROMPT.format(
@@ -539,6 +554,7 @@ def cmd_refresh(args):
         model=args.model,
         hours=args.hours,
         token_limit=args.token_limit,
+        max_input_tokens=args.max_input_tokens,
         db_path=args.db,
         verbose=args.verbose,
     )
@@ -651,7 +667,13 @@ def main():
         "--hours", type=int, default=48, help="Hours of posts to include (default: 48)"
     )
     refresh_parser.add_argument(
-        "--token-limit", type=int, default=2000, help="Target token limit (default: 2000)"
+        "--token-limit", type=int, default=2000, help="Target output token limit (default: 2000)"
+    )
+    refresh_parser.add_argument(
+        "--max-input-tokens",
+        type=int,
+        default=50000,
+        help="Max tokens of tweet content to include (default: 50000)",
     )
     refresh_parser.add_argument(
         "--verbose", "-v", action="store_true", help="Verbose output"

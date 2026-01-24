@@ -301,6 +301,12 @@
         max-width: 200px;
     }
 
+    .option-row .hint {
+        flex: none;
+        font-size: 0.8rem;
+        color: var(--text-tertiary);
+    }
+
     /* Preview modal */
     .preview-modal {
         display: none;
@@ -413,8 +419,13 @@
             <input type="number" id="refreshHours" value="48" min="1" max="168">
         </div>
         <div class="option-row">
-            <label>Token Limit:</label>
+            <label>Output Token Limit:</label>
             <input type="number" id="refreshTokenLimit" value="2000" min="500" max="8000">
+        </div>
+        <div class="option-row">
+            <label>Max Input Tokens:</label>
+            <input type="number" id="refreshMaxInputTokens" value="50000" min="5000" max="200000">
+            <span class="hint">(posts to include)</span>
         </div>
         <div class="option-row">
             <button class="btn btn-primary" onclick="refreshContext()">Generate Context</button>
@@ -696,6 +707,7 @@ Example:
         const model = document.getElementById('refreshModel').value || null;
         const hours = parseInt(document.getElementById('refreshHours').value) || 48;
         const tokenLimit = parseInt(document.getElementById('refreshTokenLimit').value) || 2000;
+        const maxInputTokens = parseInt(document.getElementById('refreshMaxInputTokens').value) || 50000;
 
         document.getElementById('refreshOptions').classList.remove('active');
         document.getElementById('previewModal').classList.remove('active');
@@ -709,7 +721,8 @@ Example:
                     provider: provider,
                     model: model,
                     hours: hours,
-                    token_limit: tokenLimit
+                    token_limit: tokenLimit,
+                    max_input_tokens: maxInputTokens
                 })
             });
 
@@ -747,6 +760,7 @@ Example:
     async function previewPrompt() {
         const hours = parseInt(document.getElementById('refreshHours').value) || 48;
         const tokenLimit = parseInt(document.getElementById('refreshTokenLimit').value) || 2000;
+        const maxInputTokens = parseInt(document.getElementById('refreshMaxInputTokens').value) || 50000;
 
         document.getElementById('loadingOverlay').classList.add('active');
 
@@ -756,14 +770,15 @@ Example:
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     hours: hours,
-                    token_limit: tokenLimit
+                    token_limit: tokenLimit,
+                    max_input_tokens: maxInputTokens
                 })
             });
 
             const data = await res.json();
 
             // Update preview modal
-            document.getElementById('previewTweetCount').textContent = `${data.tweet_count} posts`;
+            document.getElementById('previewTweetCount').textContent = `${data.tweet_count} posts in ${data.thread_count} threads`;
             document.getElementById('previewTokens').textContent = `~${data.token_estimate} tokens`;
             document.getElementById('previewPrompt').textContent = data.prompt;
 
